@@ -37,7 +37,7 @@ plugin_init (GstPlugin * plugin)
 /* this is the structure that gstreamer looks for to register plugins
  */
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR, GST_VERSION_MINOR,
-    "enesim", "Enesim GStreamer Plugin",
+    "egueb", "Egueb GStreamer Plugin",
     plugin_init, VERSION, GST_LICENSE_UNKNOWN, PACKAGE_NAME,
     "http://www.turran.org");
 
