@@ -1,0 +1,751 @@
+#include "gst_egueb_svg_src.h"
+#include "gst_egueb_type.h"
+
+GST_DEBUG_CATEGORY_EXTERN (egueb_svg_src_debug);
+#define GST_CAT_DEFAULT egueb_svg_src_debug
+
+GST_BOILERPLATE (GstEguebSvgSrc, gst_egueb_svg_src, GstBaseSrc,
+    GST_TYPE_BASE_SRC);
+
+/* Later, whenever egueb supports more than svg, we can
+ * add more templates here
+ */
+static GstStaticPadTemplate gst_egueb_svg_src_src_factory =
+GST_STATIC_PAD_TEMPLATE ("src",
+    GST_PAD_SRC,
+    GST_PAD_ALWAYS,
+    GST_STATIC_CAPS ("video/x-raw-rgb, "
+        "framerate = (fraction) [ 0, MAX ], "
+        "depth = 24, bpp = 32, "
+        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ]")
+    );
+
+static GstElementDetails gst_egueb_svg_src_details = {
+  "Egueb SVG Source",
+  "Sink",
+  "Renders SVG content using Egueb",
+  "<enesim-devel@googlegroups.com>",
+};
+
+enum
+{
+  PROP_0,
+  PROP_XML,
+  PROP_DEFAULT_WIDTH,
+  PROP_DEFAULT_HEIGHT,
+  PROP_LOCATION,
+  /* FILL ME */
+};
+
+/*----------------------------------------------------------------------------*
+ *                      The SVG application interface                         *
+ *----------------------------------------------------------------------------*/
+#if 0
+static const char *
+gst_egueb_svg_src_base_dir_get(Ender_Element *e EINA_UNUSED,
+		void *data)
+{
+	GstEguebSvgSrc *thiz = data;
+	return thiz->location;
+}
+
+/* TODO later we can add a way to go into another svg by using another pipeline
+ * for downloading ... or maybe sending an event/message?
+ */
+static Esvg_Element_Svg_Application_Descriptor gst_egueb_svg_src_app_desc = {
+	/* .base_dir_get 		  = */ gst_egueb_svg_src_base_dir_get,
+	/* .go_to 			  = */ NULL,
+	/* .script_alert 		  = */ NULL,
+	/* .video_provider_descriptor_get = */ NULL
+};
+#endif
+
+static void
+gst_egueb_svg_src_buffer_free (void *data, void *user_data)
+{
+  Enesim_Buffer_Sw_Data *sdata = data;
+  g_free (sdata->rgb888.plane0);
+}
+
+static gboolean
+gst_egueb_svg_src_setup (GstEguebSvgSrc * thiz)
+{
+  Enesim_Stream *s;
+
+  /* check if we have a valid xml */
+  if (!thiz->xml) {
+    GST_WARNING_OBJECT (thiz, "No XML set");
+    return FALSE;
+  }
+
+  /* parse the document */
+  s = enesim_stream_buffer_new (GST_BUFFER_DATA (thiz->xml),
+      GST_BUFFER_SIZE (thiz->xml));
+
+  egueb_dom_parser_parse (s, thiz->doc);
+  enesim_stream_free (s);
+
+  egueb_dom_document_element_get (thiz->doc, &thiz->svg);
+  if (!thiz->svg) {
+    GST_ERROR_OBJECT (thiz, "No valid topmost SVG element");
+    return FALSE;
+  }
+
+  /* set our own application data descriptor */
+  //esvg_element_svg_application_descriptor_set(thiz->doc, &gst_egueb_svg_src_app_desc, thiz);
+
+  return TRUE;
+}
+
+
+static void
+gst_egueb_svg_src_cleanup (GstEguebSvgSrc * thiz)
+{
+  if (thiz->svg) {
+    egueb_dom_node_unref (thiz->svg);
+    thiz->svg = NULL;
+  }
+
+  if (thiz->location) {
+    g_free (thiz->location);
+    thiz->location = NULL;
+  }
+
+  if (thiz->xml) {
+    gst_buffer_unref (thiz->xml);
+    thiz->xml = NULL;
+  }
+}
+
+static Eina_Bool
+gst_egueb_svg_src_damages_get (Egueb_Dom_Node *e EINA_UNUSED, Eina_Rectangle *area, void *data)
+{
+  GstEguebSvgSrc * thiz = data;
+  Eina_Rectangle *r;
+
+  GST_LOG_OBJECT (thiz, "Damage added at %d %d -> %d %d", area->x, area->y,
+      area->w, area->h);
+  r = malloc (sizeof(Eina_Rectangle));
+  *r = *area;
+  thiz->damages = eina_list_append (thiz->damages, r);
+
+  return EINA_TRUE;
+}
+
+static Eina_Bool
+gst_egueb_svg_src_draw (GstEguebSvgSrc * thiz)
+{
+  Enesim_Log *error = NULL;
+  Eina_Rectangle *r;
+
+  /* draw with the document locked */
+  g_mutex_lock (thiz->doc_lock);
+  /* in case we dont anything to process, send again the previous state */
+  if (!egueb_dom_document_needs_process(thiz->doc)) {
+    g_mutex_unlock (thiz->doc_lock);
+    return FALSE;
+  }
+
+  egueb_dom_document_process(thiz->doc);
+  egueb_svg_document_damages_get(thiz->doc, gst_egueb_svg_src_damages_get, thiz);
+  /* in case we dont have any damage, just send again the previous surface converted */
+  if (!thiz->damages) {
+    g_mutex_unlock (thiz->doc_lock);
+    return FALSE;
+  }
+
+  egueb_svg_element_svg_draw_list(thiz->svg, thiz->s, ENESIM_ROP_FILL, thiz->damages, 0, 0, &error);
+  g_mutex_unlock (thiz->doc_lock);
+
+  EINA_LIST_FREE (thiz->damages, r)
+    free(r);
+
+  return TRUE;
+}
+
+static gint
+gst_egueb_svg_src_get_size (GstEguebSvgSrc * thiz)
+{
+  return GST_ROUND_UP_4 (thiz->w * thiz->h * 4);
+}
+
+static void
+gst_egueb_svg_src_convert (GstEguebSvgSrc * thiz, GstBuffer **buffer)
+{
+  Enesim_Buffer *eb;
+  Eina_Rectangle clip;
+
+  if (!*buffer) {
+    Enesim_Buffer_Sw_Data sdata;
+    GstBuffer *b;
+
+    sdata.xrgb8888.plane0_stride = GST_ROUND_UP_4 (thiz->w * 4);
+    sdata.xrgb8888.plane0 = g_new(guint8, sdata.xrgb8888.plane0_stride * thiz->h);
+
+    eb = enesim_buffer_new_data_from (ENESIM_BUFFER_FORMAT_XRGB8888, thiz->w,
+        thiz->h, EINA_FALSE, &sdata, gst_egueb_svg_src_buffer_free, NULL);
+    enesim_buffer_ref (eb);
+
+    b = gst_buffer_new ();
+    GST_BUFFER_DATA (b) = (guint8 *)sdata.rgb888.plane0;
+    GST_BUFFER_SIZE (b) = sdata.rgb888.plane0_stride * thiz->h;
+
+    /* unref the buffer when done */
+    GST_BUFFER_MALLOCDATA (b) = (guint8 *) eb;
+    GST_BUFFER_FREE_FUNC (b) = (GFreeFunc ) enesim_buffer_unref;
+    *buffer = b;
+  } else {
+    Enesim_Buffer_Sw_Data sdata;
+
+    sdata.xrgb8888.plane0_stride = GST_ROUND_UP_4 (thiz->w * 4);
+    sdata.xrgb8888.plane0 = GST_BUFFER_DATA (*buffer);
+    eb = enesim_buffer_new_data_from (ENESIM_BUFFER_FORMAT_XRGB8888, thiz->w,
+        thiz->h, EINA_FALSE, &sdata, NULL, NULL);
+  }
+
+  eina_rectangle_coords_from(&clip, 0, 0, thiz->w, thiz->h);
+  /* convert it to a buffer and send it */
+  enesim_converter_surface (thiz->s, eb, ENESIM_ANGLE_0, &clip, 0, 0);
+  enesim_buffer_unref (eb);
+}
+
+static gboolean
+gst_egueb_svg_parse_naviation (GstEguebSvgSrc * thiz, GstEvent * event)
+{
+  switch (gst_navigation_event_get_type (event)) {
+    case GST_NAVIGATION_EVENT_INVALID:
+      break;
+    case GST_NAVIGATION_EVENT_KEY_PRESS:
+      break;
+    case GST_NAVIGATION_EVENT_KEY_RELEASE:
+      break;
+    case GST_NAVIGATION_EVENT_MOUSE_BUTTON_PRESS:
+      //esvg_element_svg_feed_mouse_down(thiz->e, 0);
+      break;
+    case GST_NAVIGATION_EVENT_MOUSE_BUTTON_RELEASE:
+      //esvg_element_svg_feed_mouse_up(thiz->e, 0);
+      break;
+    case GST_NAVIGATION_EVENT_MOUSE_MOVE:{
+        gdouble x;
+        gdouble y;
+
+        gst_navigation_event_parse_mouse_move_event (event, &x, &y);
+        GST_LOG_OBJECT (thiz, "Sending mouse at %g %g", x, y);
+        egueb_svg_document_feed_mouse_move(thiz->doc, x, y);
+      }
+      break;
+    case GST_NAVIGATION_EVENT_COMMAND:
+      break;
+  }
+
+  return TRUE;
+}
+
+/*----------------------------------------------------------------------------*
+ *                           BaseSrc interface                                *
+ *----------------------------------------------------------------------------*/
+static gboolean
+gst_egueb_svg_src_event (GstBaseSrc * src, GstEvent * event)
+{
+  GstEguebSvgSrc *thiz = GST_EGUEB_SVG_SRC (src);
+  gboolean ret = FALSE;
+
+  GST_DEBUG_OBJECT (thiz, "event %s", GST_EVENT_TYPE_NAME (event));
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_QOS:{
+    GstQOSType type;
+    GstClockTimeDiff diff;
+    GstClockTime timestamp;
+    gdouble proportion;
+    gint fps_n;
+    gint fps_d;
+    gint fps;
+
+    if (!thiz->svg)
+      break;
+
+    /* Whenever we receive a QoS we can decide to increase the fps
+     * on egueb and send more intermediate frames
+     */
+    gst_event_parse_qos_full (event, &type, &proportion, &diff, &timestamp);
+    fps_d = thiz->spf_n;
+    fps_n = thiz->spf_d;
+
+    if (proportion > 1.0) {
+      fps_d = fps_d * proportion;
+    } else {
+      fps_n = fps_n + ((1 - proportion) * fps_n);
+    }
+
+    fps = gst_util_uint64_scale (1, fps_n, fps_d);
+    if (fps < 1) fps = 1;
+    GST_DEBUG_OBJECT (thiz, "Updating framerate to %d/%d", fps_d, fps_n);
+    egueb_svg_element_svg_animations_fps_set(thiz->svg, fps);
+    }
+    break;
+
+    case GST_EVENT_NAVIGATION:
+    g_mutex_lock (thiz->doc_lock);
+    ret = gst_egueb_svg_parse_naviation (thiz, event);
+    g_mutex_unlock (thiz->doc_lock);
+    break;
+
+    default:
+    break;
+  }
+
+  /* pass to the base class */
+  if (!ret)
+    ret = GST_BASE_SRC_CLASS (parent_class)->event (src, event);
+
+  return ret;
+}
+
+static gboolean
+gst_egueb_svg_src_query (GstBaseSrc * src, GstQuery * query)
+{
+  gboolean ret = FALSE;
+
+  GST_DEBUG ("query %s", GST_QUERY_TYPE_NAME (query));
+  switch (GST_QUERY_TYPE (query)) {
+    default:
+    break;
+  }
+
+  if (!ret)
+    ret = GST_BASE_SRC_CLASS (parent_class)->query (src, query);
+
+  return ret;
+}
+
+static gboolean
+gst_egueb_svg_src_prepare_seek_segment (GstBaseSrc *src, GstEvent *seek,
+    GstSegment *segment)
+{
+  GST_ERROR ("prepare seek");
+  return TRUE;
+}
+
+static gboolean
+gst_egueb_svg_src_do_seek (GstBaseSrc *src, GstSegment *segment)
+{
+  GstEguebSvgSrc *thiz = GST_EGUEB_SVG_SRC (src);
+
+  g_mutex_lock (thiz->doc_lock);
+  /* TODO find the nearest keyframe based on the fps */
+  GST_DEBUG_OBJECT (src, "do seek at %" GST_TIME_FORMAT, GST_TIME_ARGS (segment->start));
+  /* do the seek on the svg element */
+  thiz->seek = segment->start;
+  g_mutex_unlock (thiz->doc_lock);
+
+  return TRUE;
+}
+
+static gboolean
+gst_egueb_svg_src_is_seekable (GstBaseSrc *src)
+{
+  return TRUE;
+}
+
+static void
+gst_egueb_svg_src_fixate (GstBaseSrc * src, GstCaps * caps)
+{
+  GstEguebSvgSrc *thiz = GST_EGUEB_SVG_SRC (src);
+  gint i;
+  GstStructure *structure;
+
+  for (i = 0; i < gst_caps_get_size (caps); ++i) {
+    structure = gst_caps_get_structure (caps, i);
+
+    /* in case the width or height are still not-fixed use the default size */
+    gst_structure_fixate_field_nearest_int (structure, "width",
+        thiz->default_w);
+    gst_structure_fixate_field_nearest_int (structure, "height",
+        thiz->default_h);
+    /* fixate the framerate in case nobody has set it */
+    gst_structure_fixate_field_nearest_fraction (structure, "framerate", 1, 30);
+  }
+}
+
+static GstCaps *
+gst_egueb_svg_src_get_caps (GstBaseSrc * src)
+{
+  GstEguebSvgSrc * thiz = GST_EGUEB_SVG_SRC (src);
+  GstCaps *caps;
+  GstStructure *s;
+  Egueb_Svg_Length_Animated aw, ah;
+  Egueb_Svg_Length *w, *h;
+
+
+  if (!thiz->svg) {
+    GST_DEBUG_OBJECT (thiz, "Can not get caps without a parsed document");
+    return gst_caps_copy (gst_pad_get_pad_template_caps (src->srcpad));
+  }
+
+#if 0
+  /* For ARGB888 */
+      "alpha_mask", G_TYPE_INT, 0x000000ff,
+      "red_mask", G_TYPE_INT, 0x0000ff00,
+      "green_mask", G_TYPE_INT, 0x00ff0000,
+      "blue_mask", G_TYPE_INT, 0xff000000,
+#endif
+
+  /* create our own structure */
+  s = gst_structure_new ("video/x-raw-rgb",
+      "bpp", G_TYPE_INT, 32,
+      "depth", G_TYPE_INT, 24,
+      "endianness", G_TYPE_INT, G_BIG_ENDIAN,
+      "red_mask", G_TYPE_INT, 0x0000ff00,
+      "green_mask", G_TYPE_INT, 0x00ff0000,
+      "blue_mask", G_TYPE_INT, 0xff000000,
+      "framerate", GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1,
+      NULL);
+
+  /* get the size of the topmost element */
+  egueb_svg_element_svg_width_get(thiz->svg, &aw);
+  egueb_svg_element_svg_height_get(thiz->svg, &ah);
+  w = &aw.anim;
+  h = &ah.anim;
+
+  /* in case it is relative, inform about a range on such size */
+  if (egueb_svg_length_is_relative (w)) {
+    GST_DEBUG_OBJECT (thiz, "Using a range for the width");
+    gst_structure_set (s, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
+    //gst_structure_set (s, "width", G_TYPE_INT, 256, NULL);
+  } else {
+    gint v;
+
+    v = ceil(egueb_svg_length_final_get (w, 0, 0, 16));
+    gst_structure_set (s, "width", G_TYPE_INT, v, NULL);
+  }
+
+  if (egueb_svg_length_is_relative (h)) {
+    GST_DEBUG_OBJECT (thiz, "Using a range for the height");
+    gst_structure_set (s, "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
+    //gst_structure_set (s, "height", G_TYPE_INT, 256, NULL);
+  } else {
+    gint v;
+
+    v = ceil(egueb_svg_length_final_get (h, 0, 0, 16));
+    gst_structure_set (s, "height", G_TYPE_INT, v, NULL);
+  }
+
+  /* finally make the caps based on this struct */
+  caps = gst_caps_new_full (s, NULL);
+
+  return caps;
+}
+
+static gboolean
+gst_egueb_svg_src_set_caps (GstBaseSrc * src, GstCaps * caps)
+{
+  GstEguebSvgSrc * thiz = GST_EGUEB_SVG_SRC (src);
+  GstStructure *s;
+  const GValue *framerate;
+  gint width = thiz->w;
+  gint height = thiz->h;
+
+  /* if do not have a valid document yet, just skip this for later */
+  if (!thiz->svg)
+    return FALSE;
+
+  /* get what downstream can change */
+  s = gst_caps_get_structure (caps, 0);
+
+  /* the framerate */
+  framerate = gst_structure_get_value (s, "framerate");
+  if (framerate) {
+    gint64 fps;
+
+    /* Store this FPS for use when generating buffers */
+    thiz->spf_n = gst_value_get_fraction_numerator (framerate);
+    thiz->spf_d = gst_value_get_fraction_denominator (framerate);
+
+    GST_DEBUG_OBJECT (thiz, "Setting framerate to %d/%d", thiz->spf_n, thiz->spf_d);
+    thiz->duration = gst_util_uint64_scale (GST_SECOND, thiz->spf_n, thiz->spf_d);
+    fps = gst_util_uint64_scale (1, thiz->spf_d, thiz->spf_n);
+    egueb_svg_element_svg_animations_fps_set(thiz->svg, fps);
+  }
+
+  /* the size */
+  gst_structure_get_int (s, "width", &width);
+  gst_structure_get_int (s, "height", &height);
+  if (width != thiz->w || height != thiz->h) {
+    if (thiz->s) {
+      enesim_surface_unref (thiz->s);
+      thiz->s = NULL;
+    }
+
+    thiz->s = enesim_surface_new (ENESIM_FORMAT_ARGB8888, width, height);
+    thiz->w = width;
+    thiz->h = height;
+
+    GST_INFO_OBJECT (thiz, "Setting size to %dx%d", width, height);
+    egueb_svg_document_width_set (thiz->doc, width);
+    egueb_svg_document_height_set (thiz->doc, height);
+  }
+
+  return TRUE;
+}
+
+static GstFlowReturn
+gst_egueb_svg_src_create (GstBaseSrc * src, guint64 offset, guint size,
+    GstBuffer ** buf)
+{
+  GstEguebSvgSrc *thiz = GST_EGUEB_SVG_SRC (src);
+  GstClockID id;
+  GstBuffer *outbuf = NULL;
+  GstClockTime next;
+  Enesim_Buffer *eb;
+  Enesim_Buffer_Sw_Data sw_data;
+  gulong buffer_size;
+  gulong new_buffer_size;
+  
+  GST_DEBUG_OBJECT (thiz, "Creating %" GST_TIME_FORMAT, GST_TIME_ARGS (offset));
+
+  /* check if we need to seek */
+  if (GST_CLOCK_TIME_IS_VALID (thiz->seek)) {
+    gdouble seconds;
+
+    seconds = thiz->seek / 1000000000.0;
+    egueb_svg_element_svg_time_set (thiz->svg, seconds);
+    thiz->last_ts = thiz->seek;
+    thiz->seek = GST_CLOCK_TIME_NONE;
+  }
+
+  buffer_size = gst_egueb_svg_src_get_size (thiz);
+
+  /* We need to check downstream if the caps have changed so we can
+   * allocate an optimus size of surface
+   */
+  gst_pad_alloc_buffer_and_set_caps (GST_BASE_SRC_PAD (src), src->offset,
+      buffer_size, GST_PAD_CAPS (GST_BASE_SRC_PAD (src)), &outbuf);
+  new_buffer_size = GST_BUFFER_SIZE (outbuf);
+  buffer_size = gst_egueb_svg_src_get_size (thiz);
+  if (new_buffer_size != buffer_size) {
+    GST_ERROR_OBJECT (thiz, "different size %d %d", new_buffer_size, buffer_size);
+    gst_buffer_unref (outbuf);
+    outbuf = NULL;
+  }
+
+  gst_egueb_svg_src_draw (thiz);
+  egueb_svg_element_svg_time_tick (thiz->svg);
+
+#if 0
+  /* TODO add a property to inform when to send an EOS, like after
+   * every animation has ended
+   */
+
+  /* we exit because we are done */
+  if (!eb) {
+    return GST_FLOW_UNEXPECTED;
+  }
+#endif
+
+  gst_egueb_svg_src_convert (thiz, &outbuf);
+  GST_DEBUG_OBJECT (thiz, "Sending buffer with ts: %" GST_TIME_FORMAT, GST_TIME_ARGS (thiz->last_ts));
+
+  /* set the duration for the next buffer, this must be done after the tick in case
+   * the QoS changed the fps on the svg
+   */
+  thiz->duration = gst_util_uint64_scale (GST_SECOND, 1,
+      egueb_svg_element_svg_animations_fps_get(thiz->svg));
+  /* set the timestamp and duration baesed on the last timestamp set */
+  GST_BUFFER_DURATION (outbuf) = thiz->duration;
+  GST_BUFFER_TIMESTAMP (outbuf) = thiz->last_ts;
+  thiz->last_ts += GST_BUFFER_DURATION (outbuf);
+
+  *buf = outbuf;
+
+  return GST_FLOW_OK;
+}
+
+static void
+gst_egueb_svg_src_get_property (GObject * object, guint prop_id, GValue * value,
+    GParamSpec * pspec)
+{
+  GstEguebSvgSrc * thiz = GST_EGUEB_SVG_SRC (object);
+
+  switch (prop_id) {
+    case PROP_XML:
+      gst_value_set_buffer (value, thiz->xml);
+      break;
+    case PROP_DEFAULT_WIDTH:
+      g_value_set_uint (value, thiz->default_w);
+      break;
+    case PROP_DEFAULT_HEIGHT:
+      g_value_set_uint (value, thiz->default_h);
+      break;
+    case PROP_LOCATION:
+      g_value_set_string (value, thiz->location);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_egueb_svg_src_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  GstEguebSvgSrc * thiz = GST_EGUEB_SVG_SRC (object);
+
+  switch (prop_id) {
+    case PROP_XML:
+      thiz->xml = gst_buffer_ref (gst_value_get_buffer (value));
+      break;
+    case PROP_DEFAULT_WIDTH:
+      thiz->default_w = g_value_get_uint (value);
+      break;
+    case PROP_DEFAULT_HEIGHT:
+      thiz->default_h = g_value_get_uint (value);
+      break;
+    case PROP_LOCATION:{
+      const gchar *location;
+
+      if (thiz->location) {
+        g_free (thiz->location);
+        thiz->location = NULL;
+      }
+      location = g_value_get_string (value);
+      if (location) {
+        thiz->location = g_strdup (location);
+      }
+      break;
+    }
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static GstStateChangeReturn
+gst_egueb_svg_src_change_state (GstElement * element, GstStateChange transition)
+{
+  GstEguebSvgSrc *thiz = GST_EGUEB_SVG_SRC (element);
+  GstStateChangeReturn ret;
+
+  switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
+      if (!gst_egueb_svg_src_setup (thiz)) {
+        ret = GST_STATE_CHANGE_FAILURE;
+        goto beach;
+      }
+      break;
+
+    /* before calling the parent descriptor for this, be sure to unlock
+     * the create function
+     */
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      thiz->done = TRUE;
+      break;
+
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    default:
+      break;
+  }
+
+beach:
+  return ret;
+}
+
+static void
+gst_egueb_svg_src_dispose (GObject * object)
+{
+  GstEguebSvgSrc *thiz = GST_EGUEB_SVG_SRC (object);
+
+  GST_DEBUG_OBJECT (thiz, "Disposing");
+  gst_egueb_svg_src_cleanup (thiz);
+  if (thiz->doc) {
+    egueb_dom_node_unref(thiz->doc);
+    thiz->doc = NULL;
+  }
+
+  if (thiz->doc_lock)
+    g_mutex_free (thiz->doc_lock);
+  GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
+
+  egueb_svg_shutdown ();
+}
+
+static void
+gst_egueb_svg_src_base_init (gpointer g_class)
+{
+  GstElementClass *element_class = GST_ELEMENT_CLASS (g_class);
+  GstBaseSrcClass *base_class = GST_BASE_SRC_CLASS (g_class);
+
+  gst_element_class_add_pad_template (element_class,
+      gst_static_pad_template_get (&gst_egueb_svg_src_src_factory));
+  gst_element_class_set_details (element_class, &gst_egueb_svg_src_details);
+
+  /* set virtual pointers */
+  base_class->create = gst_egueb_svg_src_create;
+  base_class->set_caps = gst_egueb_svg_src_set_caps;
+  base_class->get_caps = gst_egueb_svg_src_get_caps;
+  base_class->fixate = gst_egueb_svg_src_fixate;
+  base_class->event = gst_egueb_svg_src_event;
+  base_class->query = gst_egueb_svg_src_query;
+  base_class->is_seekable = gst_egueb_svg_src_is_seekable;
+  base_class->prepare_seek_segment = gst_egueb_svg_src_prepare_seek_segment;
+  base_class->do_seek = gst_egueb_svg_src_do_seek;
+}
+
+static void
+gst_egueb_svg_src_init (GstEguebSvgSrc * thiz,
+    GstEguebSvgSrcClass * g_class)
+{
+  egueb_svg_init ();
+  /* make it work in time */
+  gst_base_src_set_format (GST_BASE_SRC (thiz), GST_FORMAT_TIME);
+  thiz->doc_lock = g_mutex_new ();
+  thiz->doc = egueb_svg_document_new(NULL);
+  /* initial seek segment position */
+  thiz->seek = GST_CLOCK_TIME_NONE;
+  thiz->last_ts = 0;
+  /* set default properties */
+  thiz->default_w = 256;
+  thiz->default_h = 256;
+}
+
+static void
+gst_egueb_svg_src_class_init (GstEguebSvgSrcClass * klass)
+{
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
+
+  gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_egueb_svg_src_dispose);
+  gobject_class->set_property =
+      GST_DEBUG_FUNCPTR (gst_egueb_svg_src_set_property);
+  gobject_class->get_property =
+      GST_DEBUG_FUNCPTR (gst_egueb_svg_src_get_property);
+
+  parent_class = g_type_class_peek_parent (klass);
+
+  gstelement_class->change_state =
+      GST_DEBUG_FUNCPTR (gst_egueb_svg_src_change_state);
+
+  /* Properties */
+  g_object_class_install_property (gobject_class, PROP_XML,
+      gst_param_spec_mini_object ("xml", "XML",
+          "SVG XML Buffer",
+          GST_TYPE_BUFFER, G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_DEFAULT_WIDTH,
+      g_param_spec_uint ("width", "Width",
+          "Container width", 1, G_MAXUINT, 256,
+          G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_DEFAULT_HEIGHT,
+      g_param_spec_uint ("height", "Height",
+          "Container height", 1, G_MAXUINT, 256,
+          G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_LOCATION,
+      g_param_spec_string ("location", "Location",
+          "Location where the XML buffer was taken from",
+          NULL, G_PARAM_READWRITE));
+}

@@ -1,0 +1,12 @@
+This is a collection of GStreamer elements related to the enesim stack.
+You will find:
+
+enesim_sink: Enesim Surface Sink
+egueb_xml_sink: Egueb XML Sink
+egueb_svg_src: Egueb SVG Source
+egueb_svg: Egueb SVG Parser/Demuxer/Decoder
+
+
+How to make it work:
+
+gst-launch-0.10 filesrc location=some.svg ! egueb_svg ! xvimagesink
