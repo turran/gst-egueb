@@ -21,13 +21,13 @@ plugin_init (GstPlugin * plugin)
   GST_DEBUG_CATEGORY_INIT (egueb_svg_debug, "egueb_svg", 0, "Egueb SVG bin");
 
   /* now register the elements */
-  if (!gst_element_register (plugin, "egueb_xml_sink",
+  if (!gst_element_register (plugin, "eguebxmlsink",
           GST_RANK_MARGINAL, GST_TYPE_EGUEB_XML_SINK))
     return FALSE;
-  if (!gst_element_register (plugin, "egueb_svg_src",
+  if (!gst_element_register (plugin, "eguebsvgsrc",
           GST_RANK_MARGINAL, GST_TYPE_EGUEB_SVG_SRC))
     return FALSE;
-  if (!gst_element_register (plugin, "egueb_svg",
+  if (!gst_element_register (plugin, "eguebsvg",
           GST_RANK_PRIMARY + 1, GST_TYPE_EGUEB_SVG))
     return FALSE;
 
