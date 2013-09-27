@@ -220,14 +220,14 @@ gst_egueb_svg_init (GstEguebSvg * thiz, GstEguebSvgClass * g_class)
   GstPad *ghost_pad;
 
   /* Create the sink */
-  thiz->sink = gst_element_factory_make ("egueb_xml_sink", "sink");
+  thiz->sink = gst_element_factory_make ("eguebxmlsink", "sink");
   if (!thiz->sink) {
     GST_ERROR_OBJECT (thiz, "Unable to create 'egueb_xml' element");
     goto error_parser;
   }
 
   /* Create svg source */
-  thiz->src = gst_element_factory_make ("egueb_svg_src", "src");
+  thiz->src = gst_element_factory_make ("eguebsvgsrc", "src");
   if (!thiz->src) {
     GST_ERROR_OBJECT (thiz, "Unable to create 'egueb_svg_src' element");
     goto error_src;
