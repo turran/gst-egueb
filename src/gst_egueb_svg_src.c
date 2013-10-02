@@ -83,9 +83,9 @@ gst_egueb_svg_src_setup (GstEguebSvgSrc * thiz)
       GST_BUFFER_SIZE (thiz->xml));
 
   egueb_dom_parser_parse (s, thiz->doc);
-  enesim_stream_free (s);
+  enesim_stream_unref (s);
 
-  egueb_dom_document_element_get (thiz->doc, &thiz->svg);
+  thiz->svg = egueb_dom_document_element_get (thiz->doc);
   if (!thiz->svg) {
     GST_ERROR_OBJECT (thiz, "No valid topmost SVG element");
     return FALSE;
