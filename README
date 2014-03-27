@@ -2,9 +2,8 @@ This is a collection of GStreamer elements related to the Egueb library.
 You will find:
 
 eguebxmlsink: Egueb XML Sink
-eguebsvgsrc: Egueb SVG Source
-eguebsvg: Egueb SVG Parser/Demuxer/Decoder
-
+eguebsrc: Egueb SVG Source
+eguebdemux: Egueb SVG Parser/Demuxer/Decoder
 
 How to make it work:
 

@@ -2,8 +2,8 @@
 #include "gst_egueb_type.h"
 #include <string.h>
 
-GST_DEBUG_CATEGORY_EXTERN (egueb_xml_sink_debug);
-#define GST_CAT_DEFAULT egueb_xml_sink_debug
+GST_DEBUG_CATEGORY_EXTERN (gst_egueb_xml_sink_debug);
+#define GST_CAT_DEFAULT gst_egueb_xml_sink_debug
 
 GST_BOILERPLATE (GstEguebXmlSink, gst_egueb_xml_sink, GstElement,
     GST_TYPE_ELEMENT);
@@ -99,10 +99,24 @@ gst_egueb_xml_sink_location_get (GstPad * pad)
 
     f = gst_element_get_factory (GST_ELEMENT (parent));
     if (gst_element_factory_list_is_type (f, GST_ELEMENT_FACTORY_TYPE_SRC)) {
+      gchar *scheme;
 
       /* try to get the location property */
       g_object_get (G_OBJECT (parent), "location", &uri, NULL);
-
+      scheme = g_uri_parse_scheme (uri);
+      if (!scheme) {
+        if (!g_path_is_absolute (uri)) {
+          gchar *absolute;
+          absolute = g_build_filename (g_get_current_dir (), uri, NULL);
+          uri = g_strdup_printf ("file://%s", absolute);
+          g_free (absolute);
+        } else {
+          uri = g_strdup_printf ("file://%s", uri);
+        }
+      } else {
+        uri = g_strdup (uri);
+        g_free (scheme);
+      }
     } else {
       GstPad *sink_pad;
       GstIterator *iter;
@@ -136,14 +150,14 @@ gst_egueb_xml_sink_sink_event (GstPad * pad, GstEvent * event)
   GstBuffer *buf;
   GstMessage *message;
   gint len;
-  gchar *location;
-  gchar *baselocation = NULL;
 
   thiz = GST_EGUEB_XML_SINK (gst_pad_get_parent (pad));
 
   /* TODO later we need to handle FLUSH_START to flush the adapter too */
   switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_EOS:
+    case GST_EVENT_EOS:{
+      gchar *uri;
+
       GST_DEBUG_OBJECT (thiz, "Received EOS");
       /* The EOS should come from upstream whenever the xml file
        * has been readed completely
@@ -152,24 +166,20 @@ gst_egueb_xml_sink_sink_event (GstPad * pad, GstEvent * event)
       buf = gst_adapter_take_buffer (thiz->adapter, len);
       /* get the location */
       peer = gst_pad_get_peer (pad);
-      location = gst_egueb_xml_sink_location_get (peer);
+      uri = gst_egueb_xml_sink_location_get (peer);
       gst_object_unref (peer);
-
-      if (location) {
-        char *slash;
-        /* get the base url only */
-        slash = strrchr (location, '/');
-        baselocation = g_strndup (location, slash - location + 1);
-      }
 
       message = gst_message_new_element (GST_OBJECT (thiz),
           gst_structure_new ("xml-received",
               "xml", GST_TYPE_BUFFER, buf,
-              "base-location", G_TYPE_STRING, baselocation,
+              "uri", G_TYPE_STRING, uri,
               NULL));
       gst_element_post_message (GST_ELEMENT_CAST (thiz), message);
       gst_event_unref (event);
+      g_free (uri);
+      gst_buffer_unref (buf);
       break;
+    }
 
     default:
       break;

@@ -3,8 +3,8 @@ plugin_LTLIBRARIES = src/libgstegueb.la
 
 src_libgstegueb_la_SOURCES = \
 src/gst_egueb_xml_sink.c \
-src/gst_egueb_svg_src.c \
-src/gst_egueb_svg.c \
+src/gst_egueb_src.c \
+src/gst_egueb_demux.c \
 src/gst_egueb.c
 
 src_libgstegueb_la_CFLAGS = $(GSTREAMER_EGUEB_CFLAGS)

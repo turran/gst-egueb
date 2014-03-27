@@ -4,30 +4,30 @@
 
 #include <gst/gst.h>
 #include "gst_egueb_xml_sink.h"
-#include "gst_egueb_svg_src.h"
-#include "gst_egueb_svg.h"
+#include "gst_egueb_src.h"
+#include "gst_egueb_demux.h"
 #include "gst_egueb_type.h"
 
-GST_DEBUG_CATEGORY (egueb_xml_sink_debug);
-GST_DEBUG_CATEGORY (egueb_svg_src_debug);
-GST_DEBUG_CATEGORY (egueb_svg_debug);
+GST_DEBUG_CATEGORY (gst_egueb_xml_sink_debug);
+GST_DEBUG_CATEGORY (gst_egueb_src_debug);
+GST_DEBUG_CATEGORY (gst_egueb_demux_debug);
 
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
   /* first register the debug categories */
-  GST_DEBUG_CATEGORY_INIT (egueb_xml_sink_debug, "egueb_xml_sink", 0, "Egueb XML sink");
-  GST_DEBUG_CATEGORY_INIT (egueb_svg_src_debug, "egueb_svg_src", 0, "Egueb SVG source");
-  GST_DEBUG_CATEGORY_INIT (egueb_svg_debug, "egueb_svg", 0, "Egueb SVG bin");
+  GST_DEBUG_CATEGORY_INIT (gst_egueb_xml_sink_debug, "eguebxmlsink", 0, "Egueb XML sink");
+  GST_DEBUG_CATEGORY_INIT (gst_egueb_src_debug, "eguebsrc", 0, "Egueb SVG source");
+  GST_DEBUG_CATEGORY_INIT (gst_egueb_demux_debug, "eguebdemux", 0, "Egueb SVG demuxer");
 
   /* now register the elements */
   if (!gst_element_register (plugin, "eguebxmlsink",
           GST_RANK_MARGINAL, GST_TYPE_EGUEB_XML_SINK))
     return FALSE;
-  if (!gst_element_register (plugin, "eguebsvgsrc",
+  if (!gst_element_register (plugin, "eguebsrc",
           GST_RANK_MARGINAL, GST_TYPE_EGUEB_SVG_SRC))
     return FALSE;
-  if (!gst_element_register (plugin, "eguebsvg",
+  if (!gst_element_register (plugin, "eguebdemux",
           GST_RANK_PRIMARY + 1, GST_TYPE_EGUEB_SVG))
     return FALSE;
 

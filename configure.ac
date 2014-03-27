@@ -54,7 +54,7 @@ fi
 
 requirements_cflags=""
 requirements_libs=""
-requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-svg enesim"
+requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom enesim"
 
 PKG_CHECK_MODULES([GSTREAMER_EGUEB], [${requirements_pc}])
 
