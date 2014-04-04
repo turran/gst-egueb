@@ -49,7 +49,7 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
 {
   Enesim_Stream *s;
   Egueb_Dom_Node *doc = NULL;
-  Egueb_Dom_Feature *render, *window;
+  Egueb_Dom_Feature *render, *window, *ui;
   Egueb_Dom_String *uri;
 
   /* check if we have a valid xml */
@@ -97,8 +97,13 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
   egueb_dom_document_uri_set(thiz->doc, uri);
 
   /* optional features */
-  thiz->ui = egueb_dom_node_feature_get(thiz->doc,
+  ui = egueb_dom_node_feature_get(thiz->doc,
       EGUEB_DOM_FEATURE_UI_NAME, NULL);
+  if (ui) {
+    egueb_dom_feature_ui_input_get(ui, &thiz->input);
+    egueb_dom_feature_unref(ui);
+  }
+
   thiz->animation = egueb_dom_node_feature_get(thiz->doc,
       EGUEB_DOM_FEATURE_ANIMATION_NAME, NULL);
   thiz->io = egueb_dom_node_feature_get(thiz->doc,
@@ -114,15 +119,15 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
 static void
 gst_egueb_src_cleanup (GstEguebSrc * thiz)
 {
+  if (thiz->input) {
+    egueb_dom_input_unref(thiz->input);
+    thiz->input = NULL;
+  }
+
   /* optional features */
   if (thiz->io) {
     egueb_dom_feature_unref(thiz->io);
     thiz->io = NULL;
-  }
-
-  if (thiz->ui) {
-    egueb_dom_feature_unref(thiz->ui);
-    thiz->ui = NULL;
   }
 
   if (thiz->animation) {
@@ -249,7 +254,7 @@ gst_egueb_src_convert (GstEguebSrc * thiz, GstBuffer **buffer)
 static gboolean
 gst_egueb_svg_parse_naviation (GstEguebSrc * thiz, GstEvent * event)
 {
-  if (!thiz->ui)
+  if (!thiz->input)
     return FALSE;
 
   switch (gst_navigation_event_get_type (event)) {
@@ -271,7 +276,7 @@ gst_egueb_svg_parse_naviation (GstEguebSrc * thiz, GstEvent * event)
 
         gst_navigation_event_parse_mouse_move_event (event, &x, &y);
         GST_LOG_OBJECT (thiz, "Sending mouse at %g %g", x, y);
-	egueb_dom_feature_ui_feed_mouse_move(thiz->ui, x, y);
+	egueb_dom_input_feed_mouse_move(thiz->input, x, y);
       }
       break;
     case GST_NAVIGATION_EVENT_COMMAND:

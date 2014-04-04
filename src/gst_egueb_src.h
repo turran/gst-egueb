@@ -36,9 +36,10 @@ struct _GstEguebSrc
   Egueb_Dom_Node *doc;
   Egueb_Dom_Feature *render;
   Egueb_Dom_Feature *window;
-  Egueb_Dom_Feature *ui;
   Egueb_Dom_Feature *animation;
   Egueb_Dom_Feature *io;
+
+  Egueb_Dom_Input *input;
 
   GMutex *doc_lock;
   Enesim_Surface *s;
