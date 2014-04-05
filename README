@@ -7,4 +7,4 @@ eguebdemux: Egueb SVG Parser/Demuxer/Decoder
 
 How to make it work:
 
-gst-launch-0.10 filesrc location=some.svg ! eguebsvg ! xvimagesink
+gst-launch-0.10 filesrc location=some.svg ! eguebdemux ! xvimagesink
