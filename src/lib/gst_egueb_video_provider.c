@@ -126,6 +126,7 @@ static void _gst_egueb_video_provider_descriptor_open(void *data, Egueb_Dom_Stri
 {
 	Gst_Egueb_Video_Provider *thiz = data;
 
+	printf("loading URI %s\n", egueb_dom_string_string_get(uri));
 	/* the uri that comes from the api must be absolute */
 	gst_element_set_state(thiz->playbin2, GST_STATE_READY);
 	g_object_set(thiz->playbin2, "uri", egueb_dom_string_string_get(uri), NULL);

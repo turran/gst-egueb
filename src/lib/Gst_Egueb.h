@@ -47,6 +47,8 @@
 
 #include <Egueb_Dom.h>
 
+EAPI void gst_egueb_init(void);
+EAPI void gst_egueb_shutdown(void);
 EAPI Egueb_Dom_Video_Provider * gst_egueb_video_provider_new(
 		const Egueb_Dom_Video_Provider_Notifier *notifier,
 		Enesim_Renderer *image, Egueb_Dom_Node *n);
