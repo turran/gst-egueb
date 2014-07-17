@@ -10,7 +10,7 @@ m4_define([lt_cur], m4_eval(v_maj + v_min))
 m4_define([lt_rev], v_mic)
 m4_define([lt_age], v_min)
 
-AC_INIT([gstreamer-egueb], [v_ver], [enesim-devel@googlegroups.com])
+AC_INIT([gst-egueb], [v_ver], [enesim-devel@googlegroups.com])
 AC_PREREQ([2.60])
 AC_CONFIG_SRCDIR([configure.ac])
 AC_CONFIG_MACRO_DIR([m4])
@@ -52,11 +52,14 @@ fi
 
 ### Checks for libraries
 
-requirements_cflags=""
-requirements_libs=""
-requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom enesim"
+gst_egueb_requirements_cflags=""
+gst_egueb_requirements_libs=""
+gst_egueb_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom enesim"
 
-PKG_CHECK_MODULES([GSTREAMER_EGUEB], [${requirements_pc}])
+AC_SUBST([gst_egueb_requirements])
+AC_SUBST([gst_egueb_requirements_private])
+
+PKG_CHECK_MODULES([GSTREAMER_EGUEB], [${gst_egueb_requirements_pc}])
 
 ## Make the debug preprocessor configurable
 

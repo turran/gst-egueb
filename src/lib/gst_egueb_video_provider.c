@@ -1,5 +1,5 @@
-/* Esvg - SVG
- * Copyright (C) 2012 Jorge Luis Zapata
+/* Gst Egueb - Gstreamer based plugins and libs for Egueb
+ * Copyright (C) 2014 Jorge Luis Zapata
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -15,12 +15,13 @@
  * License along with this library.
  * If not, see <http://www.gnu.org/licenses/>.
  */
-#include "Esvg.h"
+
+#include <Egueb_Dom.h>
 #include <gst/gst.h>
 /*============================================================================*
  *                                  Local                                     *
  *============================================================================*/
-#define ESVG_LOG_COLOR_DEFAULT EINA_COLOR_ORANGE
+#define GST_EGUEB_LOG_COLOR_DEFAULT EINA_COLOR_ORANGE
 /* Whenever a file needs to generate a log, it must declare this first */
 
 #ifdef ERR
@@ -43,162 +44,136 @@
 #endif
 #define DBG(...) EINA_LOG_DOM_DBG(_egueb_svg_video_provider_gstreamer_log, __VA_ARGS__)
 
-/* FIXME we still need to register the log domain */
-static int _egueb_svg_video_provider_gstreamer_log = -1;
 
-typedef struct _Egueb_Svg_Element_Video_Gstreamer
+typedef struct _Gst_Egueb_Video_Provider
 {
-	GstElement *enesim_sink;
+	Egueb_Dom_Video_Provider *vp;
 	GstElement *playbin2;
-
 	Enesim_Renderer *image;
 
 	Enesim_Buffer *b;
 	Enesim_Surface *s;
+} Gst_Egueb_Video_Provider;
 
-	uint32_t width;
-	uint32_t height;
-} Egueb_Svg_Element_Video_Gstreamer;
+#if 0
+/* FIXME we still need to register the log domain */
+static int _egueb_svg_video_provider_gstreamer_log = -1;
+#endif
 
-static char * _egueb_svg_element_video_path_urify(const char *s)
+static void _gst_egueb_video_provider_fakesink_handoff_cb(GstElement* object,
+		GstBuffer *buf, GstPad *pad, gpointer data)
 {
-	/* FIXME we need a way to check if the path stats with an uri */
-	if (*s == '/')
-	{
-		char *uri;
-		uri = malloc(strlen(s) + 7 + 1); /* 7 = file:// */
-		strcpy(uri, "file://");
-		strcat(uri, s);
-		return uri;
-	}
-	else
-	{
-		return strdup(s);
-	}
+	Gst_Egueb_Video_Provider *thiz = data;
+
+	/* lock the renderer */
+	/* set the new surface */
+	/* unlock the renderer */
+	printf("new buffer arrived");
+	enesim_renderer_lock(thiz->image);
+	//enesim_renderer_image_src_set(thiz->image, thiz->s);
+	enesim_renderer_unlock(thiz->image);
 }
 
-static void _egueb_svg_element_video_buffer_display(GstElement *enesim_sink, Enesim_Buffer *b, gpointer user_data)
-{
-	Egueb_Svg_Element_Video_Gstreamer *thiz = user_data;
-
-	if (thiz->b == b)
-	{
-		Eina_Rectangle area;
-		/* damage the whole buffer */
-		//enesim_renderer_image_damage_add
-		eina_rectangle_coords_from(&area, 0, 0, thiz->width, thiz->height);
-		enesim_renderer_image_damage_add(thiz->image, &area);
-	}
-	else
-	{
-		/* TODO handle correctly the refcounting */
-		Enesim_Surface *s;
-
-		if (thiz->s)
-			enesim_surface_unref(thiz->s);
-		if (thiz->b)
-			enesim_buffer_unref(thiz->b);
-
-		s = enesim_surface_new_buffer_from(b);
-		thiz->s = enesim_surface_ref(s);
-		thiz->b = enesim_buffer_ref(b);
-		enesim_renderer_lock(thiz->image);
-		enesim_renderer_image_src_set(thiz->image, thiz->s);
-		enesim_renderer_unlock(thiz->image);
-	}
-}
 /*----------------------------------------------------------------------------*
- *                           The Video interface                              *
+ *                       The Video provider interface                         *
  *----------------------------------------------------------------------------*/
-static void * _egueb_svg_element_video_gstreamer_create(Enesim_Renderer *image)
+static void * _gst_egueb_video_provider_descriptor_create(void)
 {
-	Egueb_Svg_Element_Video_Gstreamer *thiz;
-	GstElement *enesim_sink;
-	static Eina_Bool _gst_init = EINA_FALSE;
+	Gst_Egueb_Video_Provider *thiz;
+	GstElement *sink;
 
-	if (!_gst_init)
-	{
-		gst_init(NULL, NULL);
-		_gst_init = EINA_TRUE;
-	}
+	thiz = calloc(1, sizeof(Gst_Egueb_Video_Provider));
+	sink = gst_element_factory_make("fakesink", NULL);
+	g_object_set(sink, "sync", TRUE, NULL);
+	g_signal_connect(G_OBJECT(sink), "handoff",
+			G_CALLBACK(_gst_egueb_video_provider_fakesink_handoff_cb),
+			thiz); 
 
-	enesim_sink = gst_element_factory_make("enesim_sink", NULL);
-	if (!enesim_sink)
-	{
-		ERR("No enesim sink element found");
-		enesim_renderer_unref(image);
-		return NULL;
-	}
-
-	thiz = calloc(1, sizeof(Egueb_Svg_Element_Video_Gstreamer));
-	thiz->image = image;
-
-	/* TODO fallback to appsink in case enesim sink is not found */
-	/* TODO playbin2 will overwrite our sink, we need
-	 * to increase the priority
-	 */
-	g_signal_connect (enesim_sink, "buffer-display",
-          G_CALLBACK (_egueb_svg_element_video_buffer_display), thiz);
-	thiz->enesim_sink = gst_object_ref(enesim_sink);
-
-	thiz->playbin2 = gst_element_factory_make("playbin2", "svg_video");
-	g_object_set(thiz->playbin2, "video-sink", thiz->enesim_sink, NULL);
+	thiz->playbin2 = gst_element_factory_make("playbin2", NULL);
+	/* define a new sink based on fakesink to catch up every buffer */
+	/* force a rgb32 bpp */
+	g_object_set(thiz->playbin2, "video-sink", sink, NULL);
 
 	return thiz;
 }
 
-static void _egueb_svg_element_video_gstreamer_free(void *data)
+static void _gst_egueb_video_provider_descriptor_destroy(void *data)
 {
-	Egueb_Svg_Element_Video_Gstreamer *thiz = data;
+	Gst_Egueb_Video_Provider *thiz = data;
 
-	enesim_renderer_unref(thiz->image);
 	gst_element_set_state(thiz->playbin2, GST_STATE_NULL);
 	gst_object_unref(thiz->playbin2);
-	gst_object_unref(thiz->enesim_sink);
+
+	if (thiz->image)
+	{
+		enesim_renderer_unref(thiz->image);
+		thiz->image = NULL;
+	}
+	if (thiz->s)
+	{
+		enesim_surface_unref(thiz->s);
+		thiz->s = NULL;
+	}
+	if (thiz->b)
+	{
+		enesim_buffer_unref(thiz->b);
+		thiz->b = NULL;
+	}
 	free(thiz);
 }
 
-static void _egueb_svg_element_video_gstreamer_setup(void *data, const Egueb_Svg_Video_Provider_Context *ctx)
+static void _gst_egueb_video_provider_descriptor_open(void *data, Egueb_Dom_String *uri)
 {
-	Egueb_Svg_Element_Video_Gstreamer *thiz = data;
-	GstState current;
-	GstState pending;
-	GstStateChangeReturn ret;
-	guint width;
-	guint height;
-	gchar *uri;
+	Gst_Egueb_Video_Provider *thiz = data;
 
-	width = ceil(ctx->width);
-	height = ceil(ctx->height);
+	/* the uri that comes from the api must be absolute */
+	gst_element_set_state(thiz->playbin2, GST_STATE_READY);
+	g_object_set(thiz->playbin2, "uri", egueb_dom_string_string_get(uri), NULL);
+}
 
-	/* FIXME later the pool */
-	/* set the element properties */
-	g_object_set(thiz->enesim_sink, "width", width,
-			"height", height,
-			"format", ENESIM_BUFFER_FORMAT_ARGB8888_PRE,
-			NULL);
-	/* set the state to READY in case the pipeline is already playing */
-	ret = gst_element_get_state(thiz->playbin2, &current, &pending, GST_CLOCK_TIME_NONE);
-	if (current != GST_STATE_READY)
-		gst_element_set_state(thiz->playbin2, GST_STATE_READY);
+static void _gst_egueb_video_provider_descriptor_close(void *data)
+{
+	Gst_Egueb_Video_Provider *thiz = data;
+	gst_element_set_state(thiz->playbin2, GST_STATE_READY);
+}
 
-	/* we need to transform the real href into a playbin2 uri */
-	uri = _egueb_svg_element_video_path_urify(ctx->href);
-	g_object_set(thiz->playbin2, "uri", uri, NULL);
-	free(uri);
-
+static void _gst_egueb_video_provider_descriptor_play(void *data)
+{
+	Gst_Egueb_Video_Provider *thiz = data;
 	gst_element_set_state(thiz->playbin2, GST_STATE_PLAYING);
 }
 
+static void _gst_egueb_video_provider_descriptor_pause(void *data)
+{
+	Gst_Egueb_Video_Provider *thiz = data;
+	gst_element_set_state(thiz->playbin2, GST_STATE_PAUSED);
+}
+
+static Egueb_Dom_Video_Provider_Descriptor _gst_egueb_video_provider = {
+	/* .create 	= */ _gst_egueb_video_provider_descriptor_create,
+	/* .destroy 	= */ _gst_egueb_video_provider_descriptor_destroy,
+	/* .open 	= */ _gst_egueb_video_provider_descriptor_open,
+	/* .close 	= */ _gst_egueb_video_provider_descriptor_close,
+	/* .play 	= */ _gst_egueb_video_provider_descriptor_play,
+	/* .pause 	= */ _gst_egueb_video_provider_descriptor_pause
+};
 /*============================================================================*
  *                                 Global                                     *
  *============================================================================*/
-Egueb_Svg_Video_Provider_Descriptor egueb_svg_video_provider_gstreamer_descriptor = {
-	/* .create 	= */ _egueb_svg_element_video_gstreamer_create,
-	/* .free 	= */ _egueb_svg_element_video_gstreamer_free,
-	/* .setup 	= */ _egueb_svg_element_video_gstreamer_setup,
-};
 /*============================================================================*
  *                                   API                                      *
  *============================================================================*/
+EAPI Egueb_Dom_Video_Provider * gst_egueb_video_provider_new(
+		const Egueb_Dom_Video_Provider_Notifier *notifier,
+		Enesim_Renderer *image, Egueb_Dom_Node *n)
+{
+	Gst_Egueb_Video_Provider *thiz;
+	Egueb_Dom_Video_Provider *ret;
 
+	ret = egueb_dom_video_provider_new(&_gst_egueb_video_provider,
+			notifier, image, n);
+	thiz = egueb_dom_video_provider_data_get(ret);
+	thiz->vp = ret;
+
+	return ret;
+}
