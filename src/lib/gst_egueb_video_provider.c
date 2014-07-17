@@ -171,8 +171,15 @@ EAPI Egueb_Dom_Video_Provider * gst_egueb_video_provider_new(
 	Egueb_Dom_Video_Provider *ret;
 
 	ret = egueb_dom_video_provider_new(&_gst_egueb_video_provider,
-			notifier, image, n);
+			notifier, enesim_renderer_ref(image), n);
+	if (!ret)
+	{
+		enesim_renderer_unref(image);
+		return NULL;
+	}
+
 	thiz = egueb_dom_video_provider_data_get(ret);
+	thiz->image = image;
 	thiz->vp = ret;
 
 	return ret;
