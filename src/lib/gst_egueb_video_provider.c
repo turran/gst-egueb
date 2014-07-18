@@ -44,34 +44,71 @@
 #endif
 #define DBG(...) EINA_LOG_DOM_DBG(_egueb_svg_video_provider_gstreamer_log, __VA_ARGS__)
 
+#if 0
+/* FIXME we still need to register the log domain */
+static int _egueb_svg_video_provider_gstreamer_log = -1;
+#endif
+
 
 typedef struct _Gst_Egueb_Video_Provider
 {
 	Egueb_Dom_Video_Provider *vp;
 	GstElement *playbin2;
 	Enesim_Renderer *image;
-
-	Enesim_Buffer *b;
-	Enesim_Surface *s;
 } Gst_Egueb_Video_Provider;
 
-#if 0
-/* FIXME we still need to register the log domain */
-static int _egueb_svg_video_provider_gstreamer_log = -1;
-#endif
+static void _gst_egueb_video_provider_buffer_free(void *data, void *user_data)
+{
+	GstBuffer *buffer = user_data;
+	gst_buffer_unref(buffer);
+}
 
-static void _gst_egueb_video_provider_fakesink_handoff_cb(GstElement* object,
+static void _gst_egueb_video_provider_fakesink_handoff_cb(GstElement *object,
 		GstBuffer *buf, GstPad *pad, gpointer data)
 {
 	Gst_Egueb_Video_Provider *thiz = data;
+	GstCaps *caps;
+	const GstStructure *s;
+	gint width, height;
+	Enesim_Surface *surface;
+
+	caps = gst_buffer_get_caps(buf);
+	s = gst_caps_get_structure(caps, 0);
+	/* get the width and height */
+	gst_structure_get_int(s, "width", &width);
+	gst_structure_get_int(s, "height", &height);
+	gst_caps_unref(caps);
 
 	/* lock the renderer */
-	/* set the new surface */
-	/* unlock the renderer */
-	printf("new buffer arrived");
 	enesim_renderer_lock(thiz->image);
-	//enesim_renderer_image_src_set(thiz->image, thiz->s);
+	/* set the new surface */
+	surface = enesim_surface_new_data_from(ENESIM_FORMAT_ARGB8888,
+			width, height, EINA_FALSE, GST_BUFFER_DATA(buf),
+			GST_ROUND_UP_4(width * 4), _gst_egueb_video_provider_buffer_free, gst_buffer_ref(buf));
+	enesim_renderer_image_source_surface_set(thiz->image, surface);
+	/* unlock the renderer */
 	enesim_renderer_unlock(thiz->image);
+}
+
+/* We will use this to notify egueb about some changes (buffering, state, error, whatever) */
+static gboolean _gst_egueb_video_provider_bus_watch(GstBus *bus, GstMessage *msg, gpointer data)
+{
+	Gst_Egueb_Video_Provider *thiz = data;
+
+	if (msg->src != (gpointer) thiz->playbin2)
+		return TRUE;
+
+	switch (GST_MESSAGE_TYPE (msg)) {
+		case GST_MESSAGE_EOS:
+		break;
+
+		case GST_MESSAGE_STATE_CHANGED:
+		break;
+
+		default:
+		break;
+	}
+	return TRUE;
 }
 
 /*----------------------------------------------------------------------------*
@@ -80,18 +117,49 @@ static void _gst_egueb_video_provider_fakesink_handoff_cb(GstElement* object,
 static void * _gst_egueb_video_provider_descriptor_create(void)
 {
 	Gst_Egueb_Video_Provider *thiz;
-	GstElement *sink;
+	GstElement *fakesink, *capsfilter, *sink;
+	GstBus *bus;
+	GstPad *pad, *ghost_pad;
+	GstCaps *caps;
 
 	thiz = calloc(1, sizeof(Gst_Egueb_Video_Provider));
-	sink = gst_element_factory_make("fakesink", NULL);
-	g_object_set(sink, "sync", TRUE, NULL);
-	g_signal_connect(G_OBJECT(sink), "handoff",
+
+	sink = gst_bin_new(NULL);
+
+	/* force a rgb32 bpp */
+	capsfilter = gst_element_factory_make("capsfilter", NULL);
+	caps = gst_caps_new_simple ("video/x-raw-rgb",
+			"depth", G_TYPE_INT, 24, "bpp", G_TYPE_INT, 32,
+			"endianness", G_TYPE_INT, G_BIG_ENDIAN,
+			"red_mask", G_TYPE_INT, 0x0000ff00,
+			"green_mask", G_TYPE_INT, 0x00ff0000,
+			"blue_mask", G_TYPE_INT, 0xff000000,
+			NULL);
+	g_object_set(capsfilter, "caps", caps, NULL);
+
+	/* define a new sink based on fakesink to catch up every buffer */
+	fakesink = gst_element_factory_make("fakesink", NULL);
+	g_object_set(fakesink, "sync", TRUE, "signal-handoffs", TRUE, NULL);
+	g_signal_connect(G_OBJECT(fakesink), "handoff",
 			G_CALLBACK(_gst_egueb_video_provider_fakesink_handoff_cb),
 			thiz); 
 
+	gst_bin_add_many(GST_BIN(sink), capsfilter, fakesink, NULL);
+	gst_element_link(capsfilter, fakesink);
+	/* Create ghost pad and link it to the capsfilter */
+	pad = gst_element_get_static_pad (capsfilter, "sink");
+	ghost_pad = gst_ghost_pad_new ("sink", pad);
+	gst_pad_set_active (ghost_pad, TRUE);
+	gst_element_add_pad (GST_ELEMENT(sink), ghost_pad);
+	gst_object_unref (pad);
+
 	thiz->playbin2 = gst_element_factory_make("playbin2", NULL);
-	/* define a new sink based on fakesink to catch up every buffer */
-	/* force a rgb32 bpp */
+	/* we add a message handler */
+	bus = gst_pipeline_get_bus (GST_PIPELINE (thiz->playbin2));
+	gst_bus_add_watch (bus, _gst_egueb_video_provider_bus_watch, thiz);
+	gst_object_unref (bus);
+
+	/* finally set the sink */
 	g_object_set(thiz->playbin2, "video-sink", sink, NULL);
 
 	return thiz;
@@ -109,16 +177,6 @@ static void _gst_egueb_video_provider_descriptor_destroy(void *data)
 		enesim_renderer_unref(thiz->image);
 		thiz->image = NULL;
 	}
-	if (thiz->s)
-	{
-		enesim_surface_unref(thiz->s);
-		thiz->s = NULL;
-	}
-	if (thiz->b)
-	{
-		enesim_buffer_unref(thiz->b);
-		thiz->b = NULL;
-	}
 	free(thiz);
 }
 
@@ -126,7 +184,6 @@ static void _gst_egueb_video_provider_descriptor_open(void *data, Egueb_Dom_Stri
 {
 	Gst_Egueb_Video_Provider *thiz = data;
 
-	printf("loading URI %s\n", egueb_dom_string_string_get(uri));
 	/* the uri that comes from the api must be absolute */
 	gst_element_set_state(thiz->playbin2, GST_STATE_READY);
 	g_object_set(thiz->playbin2, "uri", egueb_dom_string_string_get(uri), NULL);
