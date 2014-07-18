@@ -56,6 +56,11 @@ gst_egueb_requirements_cflags=""
 gst_egueb_requirements_libs=""
 gst_egueb_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom enesim"
 
+dnl make GST_MAJORMINOR available in Makefile.am
+GST_MAJORMINOR=0.10
+AC_SUBST(GST_MAJORMINOR)
+
+
 AC_SUBST([gst_egueb_requirements])
 AC_SUBST([gst_egueb_requirements_private])
 
