@@ -11,7 +11,12 @@ It provides:
 What can I do with it?
 ======================
 With the elements you can build a pipeline like this:
-```gst-launch-0.10 filesrc location=some.svg ! eguebdemux ! xvimagesink```
+
+```bash
+gst-launch-0.10 filesrc location=some.svg ! eguebdemux ! xvimagesink
+```
+
+
 You will get the svg file rendered with animations, scripting, user navigation, etc. That is, all the features that Egüeb has.
 
 The video provider interface let's you implement any <video> tag for your own XML dialect based on Egüeb. Right now it used to
