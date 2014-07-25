@@ -1,5 +1,5 @@
-What is it
-==========
+What is it?
+===========
 Gst-Egueb is a package that helps the integration of GStreamer with Egüeb and the other way around.
 It provides:
 + A collection of GStreamer elements related to Egueb technology.
