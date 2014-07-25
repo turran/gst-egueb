@@ -105,7 +105,7 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
   }
 
   thiz->animation = egueb_dom_node_feature_get(thiz->doc,
-      EGUEB_DOM_FEATURE_ANIMATION_NAME, NULL);
+      EGUEB_SMIL_FEATURE_ANIMATION_NAME, NULL);
   thiz->io = egueb_dom_node_feature_get(thiz->doc,
       EGUEB_DOM_FEATURE_IO_NAME, NULL);
   /* TODO for now we make the feature itself handle the io */
@@ -323,7 +323,7 @@ gst_egueb_src_event (GstBaseSrc * src, GstEvent * event)
     if (fps < 1) fps = 1;
     GST_DEBUG_OBJECT (thiz, "Updating framerate to %d/%d", fps_d, fps_n);
     thiz->fps = fps;
-    egueb_dom_feature_animation_fps_set(thiz->animation, fps);
+    egueb_smil_feature_animation_fps_set(thiz->animation, fps);
     }
     break;
 
@@ -502,7 +502,7 @@ gst_egueb_src_set_caps (GstBaseSrc * src, GstCaps * caps)
     thiz->fps = gst_util_uint64_scale (1, thiz->spf_d, thiz->spf_n);
     
     if (thiz->animation) {
-      egueb_dom_feature_animation_fps_set(thiz->animation, thiz->fps);
+      egueb_smil_feature_animation_fps_set(thiz->animation, thiz->fps);
     }
   }
 
@@ -570,7 +570,7 @@ gst_egueb_src_create (GstBaseSrc * src, guint64 offset, guint size,
   }
 
   gst_egueb_src_draw (thiz);
-  egueb_dom_feature_animation_tick (thiz->animation);
+  egueb_smil_feature_animation_tick (thiz->animation);
 
 #if 0
   /* TODO add a property to inform when to send an EOS, like after
@@ -708,6 +708,7 @@ gst_egueb_src_dispose (GObject * object)
     g_mutex_free (thiz->doc_lock);
   GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
 
+  egueb_smil_shutdown ();
   egueb_dom_shutdown ();
 }
 
@@ -738,6 +739,7 @@ gst_egueb_src_init (GstEguebSrc * thiz,
     GstEguebSrcClass * g_class)
 {
   egueb_dom_init ();
+  egueb_smil_init ();
   /* make it work in time */
   gst_base_src_set_format (GST_BASE_SRC (thiz), GST_FORMAT_TIME);
   thiz->doc_lock = g_mutex_new ();

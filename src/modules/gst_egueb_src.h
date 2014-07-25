@@ -7,6 +7,7 @@
 #include <gst/interfaces/navigation.h>
 
 #include <Egueb_Dom.h>
+#include <Egueb_Smil.h>
 
 G_BEGIN_DECLS
 

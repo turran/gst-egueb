@@ -17,7 +17,7 @@ AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
 AC_USE_SYSTEM_EXTENSIONS
 
-AM_INIT_AUTOMAKE([1.6 dist-bzip2])
+AM_INIT_AUTOMAKE([foreign 1.6 dist-bzip2])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
 AC_USE_SYSTEM_EXTENSIONS
@@ -54,7 +54,9 @@ fi
 
 gst_egueb_requirements_cflags=""
 gst_egueb_requirements_libs=""
-gst_egueb_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom enesim"
+gst_egueb_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom egueb-smil enesim"
+
+
 
 dnl make GST_MAJORMINOR available in Makefile.am
 GST_MAJORMINOR=0.10
@@ -65,6 +67,8 @@ AC_SUBST([gst_egueb_requirements])
 AC_SUBST([gst_egueb_requirements_private])
 
 PKG_CHECK_MODULES([GSTREAMER_EGUEB], [${gst_egueb_requirements_pc}])
+
+## TODO Dependencies for the modules
 
 ## Make the debug preprocessor configurable
 
