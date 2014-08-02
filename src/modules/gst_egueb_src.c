@@ -542,6 +542,28 @@ gst_egueb_src_create (GstBaseSrc * src, guint64 offset, guint size,
   
   GST_DEBUG_OBJECT (thiz, "Creating %" GST_TIME_FORMAT, GST_TIME_ARGS (offset));
 
+  /* check if we need to update the new segment */
+  if (thiz->animation) {
+    Egueb_Smil_Clock clock;
+
+    if (egueb_smil_feature_animation_duration_get(thiz->animation, &clock)) {
+      if (thiz->last_stop < clock) {
+        gst_base_src_new_seamless_segment (src, 0, clock, thiz->last_ts); 
+      } else if (thiz->last_stop > clock) {
+        GST_DEBUG ("EOS");
+        return GST_FLOW_UNEXPECTED;
+      }
+      thiz->last_stop = clock;
+    }
+  }
+
+  /* check if we need to send the EOS */
+  if (thiz->last_ts >= thiz->last_stop) {
+        GST_DEBUG ("EOS reached, current: %" GST_TIME_FORMAT " stop: %" GST_TIME_FORMAT,
+            GST_TIME_ARGS (thiz->last_ts), GST_TIME_ARGS (thiz->last_stop));
+        return GST_FLOW_UNEXPECTED;
+  }
+
 #if 0
   /* check if we need to seek */
   if (GST_CLOCK_TIME_IS_VALID (thiz->seek)) {
@@ -570,7 +592,10 @@ gst_egueb_src_create (GstBaseSrc * src, guint64 offset, guint size,
   }
 
   gst_egueb_src_draw (thiz);
-  egueb_smil_feature_animation_tick (thiz->animation);
+
+  if (thiz->animation) {
+    egueb_smil_feature_animation_tick (thiz->animation);
+  }
 
 #if 0
   /* TODO add a property to inform when to send an EOS, like after
@@ -746,6 +771,7 @@ gst_egueb_src_init (GstEguebSrc * thiz,
   /* initial seek segment position */
   thiz->seek = GST_CLOCK_TIME_NONE;
   thiz->last_ts = 0;
+  thiz->last_stop = -1;
   /* set default properties */
   thiz->default_w = 256;
   thiz->default_h = 256;

@@ -52,6 +52,7 @@ struct _GstEguebSrc
   gint spf_n;
   gint spf_d;
 
+  gint64 last_stop;
   guint64 seek;
   guint64 last_ts;
   gint64 duration;
