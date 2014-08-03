@@ -31,8 +31,8 @@ enum
 {
   PROP_0,
   PROP_XML,
-  PROP_DEFAULT_WIDTH,
-  PROP_DEFAULT_HEIGHT,
+  PROP_CONTAINER_WIDTH,
+  PROP_CONTAINER_HEIGHT,
   PROP_URI,
   /* FILL ME */
 };
@@ -415,9 +415,9 @@ gst_egueb_src_fixate (GstBaseSrc * src, GstCaps * caps)
 
     /* in case the width or height are still not-fixed use the default size */
     gst_structure_fixate_field_nearest_int (structure, "width",
-        thiz->default_w);
+        thiz->container_w);
     gst_structure_fixate_field_nearest_int (structure, "height",
-        thiz->default_h);
+        thiz->container_h);
     /* fixate the framerate in case nobody has set it */
     gst_structure_fixate_field_nearest_fraction (structure, "framerate", 30, 1);
   }
@@ -465,8 +465,8 @@ gst_egueb_src_get_caps (GstBaseSrc * src)
     GST_ERROR_OBJECT (thiz, "Not supported yet");
     return gst_caps_copy (gst_pad_get_pad_template_caps (src->srcpad));
   } else {
-    egueb_dom_feature_window_content_size_set(thiz->window, thiz->default_w,
-        thiz->default_h);
+    egueb_dom_feature_window_content_size_set(thiz->window, thiz->container_w,
+        thiz->container_h);
     egueb_dom_feature_window_content_size_get(thiz->window, &cw, &ch);
   }
 
@@ -658,11 +658,11 @@ gst_egueb_src_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_XML:
       gst_value_set_buffer (value, thiz->xml);
       break;
-    case PROP_DEFAULT_WIDTH:
-      g_value_set_uint (value, thiz->default_w);
+    case PROP_CONTAINER_WIDTH:
+      g_value_set_uint (value, thiz->container_w);
       break;
-    case PROP_DEFAULT_HEIGHT:
-      g_value_set_uint (value, thiz->default_h);
+    case PROP_CONTAINER_HEIGHT:
+      g_value_set_uint (value, thiz->container_h);
       break;
     case PROP_URI:
       g_value_set_string (value, thiz->location);
@@ -683,11 +683,11 @@ gst_egueb_src_set_property (GObject * object, guint prop_id,
     case PROP_XML:
       thiz->xml = gst_buffer_ref (gst_value_get_buffer (value));
       break;
-    case PROP_DEFAULT_WIDTH:
-      thiz->default_w = g_value_get_uint (value);
+    case PROP_CONTAINER_WIDTH:
+      thiz->container_w = g_value_get_uint (value);
       break;
-    case PROP_DEFAULT_HEIGHT:
-      thiz->default_h = g_value_get_uint (value);
+    case PROP_CONTAINER_HEIGHT:
+      thiz->container_h = g_value_get_uint (value);
       break;
     case PROP_URI:{
       const gchar *location;
@@ -796,8 +796,8 @@ gst_egueb_src_init (GstEguebSrc * thiz,
   thiz->last_ts = 0;
   thiz->last_stop = -1;
   /* set default properties */
-  thiz->default_w = 256;
-  thiz->default_h = 256;
+  thiz->container_w = 256;
+  thiz->container_h = 256;
 }
 
 static void
@@ -820,13 +820,13 @@ gst_egueb_src_class_init (GstEguebSrcClass * klass)
   /* Properties */
   g_object_class_install_property (gobject_class, PROP_XML,
       gst_param_spec_mini_object ("xml", "XML",
-          "SVG XML Buffer",
+          "XML Buffer",
           GST_TYPE_BUFFER, G_PARAM_READWRITE));
-  g_object_class_install_property (gobject_class, PROP_DEFAULT_WIDTH,
+  g_object_class_install_property (gobject_class, PROP_CONTAINER_WIDTH,
       g_param_spec_uint ("width", "Width",
           "Container width", 1, G_MAXUINT, 256,
           G_PARAM_READWRITE));
-  g_object_class_install_property (gobject_class, PROP_DEFAULT_HEIGHT,
+  g_object_class_install_property (gobject_class, PROP_CONTAINER_HEIGHT,
       g_param_spec_uint ("height", "Height",
           "Container height", 1, G_MAXUINT, 256,
           G_PARAM_READWRITE));

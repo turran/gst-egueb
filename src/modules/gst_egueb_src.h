@@ -30,8 +30,8 @@ struct _GstEguebSrc
   GstBaseSrc parent;
   /* properties */
   GstBuffer *xml;
-  guint default_w;
-  guint default_h;
+  guint container_w;
+  guint container_h;
   gchar *location;
   /* private */
   Egueb_Dom_Node *doc;

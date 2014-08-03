@@ -25,8 +25,6 @@ struct _GstEguebDemux
   GstElement *sink;
   GstElement *src;
   GstBuffer *xml;
-  guint w;
-  guint h;
 };
 
 struct _GstEguebDemuxClass

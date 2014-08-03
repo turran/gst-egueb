@@ -38,6 +38,14 @@ static GstElementDetails gst_egueb_demux_details = {
   "<enesim-devel@googlegroups.com>",
 };
 
+enum
+{
+  PROP_0,
+  PROP_CONTAINER_WIDTH,
+  PROP_CONTAINER_HEIGHT,
+  /* FILL ME */
+};
+
 GST_BOILERPLATE (GstEguebDemux, gst_egueb_demux, GstBin, GST_TYPE_BIN);
 
 static gboolean
@@ -136,6 +144,11 @@ gst_egueb_demux_get_property (GObject * object, guint prop_id, GValue * value,
   thiz = GST_EGUEB_DEMUX (object);
 
   switch (prop_id) {
+    case PROP_CONTAINER_WIDTH:
+    case PROP_CONTAINER_HEIGHT:
+      g_object_get_property (G_OBJECT (thiz->src),
+          g_param_spec_get_name (pspec), value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -153,6 +166,12 @@ gst_egueb_demux_set_property (GObject * object, guint prop_id,
   thiz = GST_EGUEB_DEMUX (object);
 
   switch (prop_id) {
+    /* forwarded properties */
+    case PROP_CONTAINER_WIDTH:
+    case PROP_CONTAINER_HEIGHT:
+      g_object_set_property (G_OBJECT (thiz->src),
+          g_param_spec_get_name (pspec), value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -199,6 +218,14 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
 
   /* Register signals */
   /* Register properties */
+  g_object_class_install_property (gobject_class, PROP_CONTAINER_WIDTH,
+      g_param_spec_uint ("width", "Width",
+          "Container width", 1, G_MAXUINT, 256,
+          G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_CONTAINER_HEIGHT,
+      g_param_spec_uint ("height", "Height",
+          "Container height", 1, G_MAXUINT, 256,
+          G_PARAM_READWRITE));
 }
 
 static void
