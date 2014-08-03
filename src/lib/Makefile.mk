@@ -8,5 +8,5 @@ src_lib_libgstegueb_la_SOURCES = \
 src/lib/gst_egueb_video_provider.c \
 src/lib/gst_egueb_main.c
 
-src_lib_libgstegueb_la_CPPFLAGS = $(GSTREAMER_EGUEB_CFLAGS)
-src_lib_libgstegueb_la_LIBADD = $(GSTREAMER_EGUEB_LIBS)
+src_lib_libgstegueb_la_CPPFLAGS = $(GST_EGUEB_LIB_CFLAGS)
+src_lib_libgstegueb_la_LIBADD = $(GST_EGUEB_LIB_LIBS)

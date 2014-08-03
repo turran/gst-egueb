@@ -52,21 +52,23 @@ fi
 
 ### Checks for libraries
 
-gst_egueb_requirements_cflags=""
-gst_egueb_requirements_libs=""
-gst_egueb_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom egueb-smil enesim"
+gst_egueb_lib_requirements_cflags=""
+gst_egueb_lib_requirements_libs=""
+gst_egueb_lib_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom enesim"
 
-
+gst_egueb_modules_requirements_cflags=""
+gst_egueb_modules_requirements_libs=""
+gst_egueb_modules_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom egueb-smil enesim"
 
 dnl make GST_MAJORMINOR available in Makefile.am
 GST_MAJORMINOR=0.10
 AC_SUBST(GST_MAJORMINOR)
 
+AC_SUBST([gst_egueb_lib_requirements])
+AC_SUBST([gst_egueb_lib_requirements_private])
 
-AC_SUBST([gst_egueb_requirements])
-AC_SUBST([gst_egueb_requirements_private])
-
-PKG_CHECK_MODULES([GSTREAMER_EGUEB], [${gst_egueb_requirements_pc}])
+PKG_CHECK_MODULES([GST_EGUEB_LIB], [${gst_egueb_lib_requirements_pc}])
+PKG_CHECK_MODULES([GST_EGUEB_MODULES], [${gst_egueb_modules_requirements_pc}])
 
 ## TODO Dependencies for the modules
 
