@@ -321,7 +321,7 @@ gst_egueb_src_event (GstBaseSrc * src, GstEvent * event)
 
     fps = gst_util_uint64_scale (1, fps_n, fps_d);
     if (fps < 1) fps = 1;
-    GST_DEBUG_OBJECT (thiz, "Updating framerate to %d/%d", fps_d, fps_n);
+    GST_DEBUG_OBJECT (thiz, "Updating framerate to %d/%d", fps_n, fps_d);
     thiz->fps = fps;
     egueb_smil_feature_animation_fps_set(thiz->animation, fps);
     }
@@ -406,7 +406,7 @@ gst_egueb_src_fixate (GstBaseSrc * src, GstCaps * caps)
     gst_structure_fixate_field_nearest_int (structure, "height",
         thiz->default_h);
     /* fixate the framerate in case nobody has set it */
-    gst_structure_fixate_field_nearest_fraction (structure, "framerate", 1, 30);
+    gst_structure_fixate_field_nearest_fraction (structure, "framerate", 30, 1);
   }
 }
 
@@ -494,10 +494,10 @@ gst_egueb_src_set_caps (GstBaseSrc * src, GstCaps * caps)
   if (framerate) {
 
     /* Store this FPS for use when generating buffers */
-    thiz->spf_n = gst_value_get_fraction_numerator (framerate);
-    thiz->spf_d = gst_value_get_fraction_denominator (framerate);
+    thiz->spf_n = gst_value_get_fraction_denominator (framerate);
+    thiz->spf_d = gst_value_get_fraction_numerator (framerate);
 
-    GST_DEBUG_OBJECT (thiz, "Setting framerate to %d/%d", thiz->spf_n, thiz->spf_d);
+    GST_DEBUG_OBJECT (thiz, "Setting framerate to %d/%d", thiz->spf_d, thiz->spf_n);
     thiz->duration = gst_util_uint64_scale (GST_SECOND, thiz->spf_n, thiz->spf_d);
     thiz->fps = gst_util_uint64_scale (1, thiz->spf_d, thiz->spf_n);
     
