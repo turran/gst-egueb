@@ -7,6 +7,8 @@ static GMainLoop *main_loop;
 static GstElement *pipeline;
 static int encoder = -1;
 static char *outname = NULL;
+static int width = 256;
+static int height = 256;
 
 typedef enum _Gst_Egueb_Record_Encoder_Type
 {
@@ -108,6 +110,7 @@ static void uridecodebin_pad_added_cb(GstElement *src, GstPad *pad, gpointer *da
 	GstPad *sinkpad, *srcpad;
 
 	demuxer = gst_element_factory_make("eguebdemux", NULL);
+	g_object_set(demuxer, "width", width, "height", height, NULL);
 	sinkpad = gst_element_get_static_pad(demuxer, "sink");
 	srcpad = gst_element_get_static_pad(demuxer, "video");
 
@@ -138,6 +141,10 @@ int main(int argc, char **argv)
 	GOptionEntry options[] = {
 		{"encoder", 'e', 0, G_OPTION_ARG_INT, &encoder,
 				"The encoder to use (-1 = auto, 0 = png, 2 = ogg)", "VAL"},
+		{"width", 'w', 0, G_OPTION_ARG_INT, &width,
+				"The width to use for the container", "VAL"},
+		{"height", 'w', 0, G_OPTION_ARG_INT, &width,
+				"The height to use for the container", "VAL"},
 		{NULL}
 	};
 	GError *err = NULL;
