@@ -33,6 +33,7 @@ enum
   PROP_XML,
   PROP_CONTAINER_WIDTH,
   PROP_CONTAINER_HEIGHT,
+  PROP_BACKGROUND_COLOR,
   PROP_URI,
   /* FILL ME */
 };
@@ -200,8 +201,15 @@ gst_egueb_src_draw (GstEguebSrc * thiz)
     return FALSE;
   }
 
-  egueb_dom_feature_render_draw_list(thiz->render, thiz->s, ENESIM_ROP_FILL,
-      thiz->damages, 0, 0, NULL);
+  if (enesim_renderer_background_color_get (thiz->background) != 0) {
+    enesim_renderer_draw_list(thiz->background, thiz->s, ENESIM_ROP_FILL,
+        thiz->damages, 0, 0, NULL);
+    egueb_dom_feature_render_draw_list(thiz->render, thiz->s, ENESIM_ROP_BLEND,
+        thiz->damages, 0, 0, NULL);
+  } else {
+    egueb_dom_feature_render_draw_list(thiz->render, thiz->s, ENESIM_ROP_FILL,
+        thiz->damages, 0, 0, NULL);
+  }
 
   g_mutex_unlock (thiz->doc_lock);
 
@@ -664,6 +672,10 @@ gst_egueb_src_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_CONTAINER_HEIGHT:
       g_value_set_uint (value, thiz->container_h);
       break;
+    case PROP_BACKGROUND_COLOR:
+      g_value_set_uint (value,
+          enesim_renderer_background_color_get (thiz->background));
+      break;
     case PROP_URI:
       g_value_set_string (value, thiz->location);
       break;
@@ -688,6 +700,10 @@ gst_egueb_src_set_property (GObject * object, guint prop_id,
       break;
     case PROP_CONTAINER_HEIGHT:
       thiz->container_h = g_value_get_uint (value);
+      break;
+    case PROP_BACKGROUND_COLOR:
+      enesim_renderer_background_color_set (thiz->background,
+          g_value_get_uint (value));
       break;
     case PROP_URI:{
       const gchar *location;
@@ -752,6 +768,8 @@ gst_egueb_src_dispose (GObject * object)
   GST_DEBUG_OBJECT (thiz, "Disposing");
   gst_egueb_src_cleanup (thiz);
 
+  enesim_renderer_unref(thiz->background);
+
   if (thiz->doc_lock)
     g_mutex_free (thiz->doc_lock);
   GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
@@ -798,6 +816,8 @@ gst_egueb_src_init (GstEguebSrc * thiz,
   /* set default properties */
   thiz->container_w = 256;
   thiz->container_h = 256;
+  thiz->background = enesim_renderer_background_new();
+  enesim_renderer_background_color_set (thiz->background, 0x00000000);
 }
 
 static void
@@ -834,4 +854,8 @@ gst_egueb_src_class_init (GstEguebSrcClass * klass)
       g_param_spec_string ("uri", "URI",
           "URI where the XML buffer was taken from",
           NULL, G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_BACKGROUND_COLOR,
+      g_param_spec_uint ("background-color", "Background Color",
+          "Background color to use (big-endian ARGB)", 0, G_MAXUINT32,
+          0, G_PARAM_READWRITE));
 }

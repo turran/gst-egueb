@@ -7,7 +7,6 @@ GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
 /* The idea of this element is that it should produce image buffers
  * with the rendered svg per frame
  * as properties we might have:
- * - width/height The container size
  * - framerate The framerate of the svg
  * Should it work in pull and push mode?
  * It should use the enesim buffer instead of normal gstbuffers to create
@@ -43,6 +42,7 @@ enum
   PROP_0,
   PROP_CONTAINER_WIDTH,
   PROP_CONTAINER_HEIGHT,
+  PROP_BACKGROUND_COLOR,
   /* FILL ME */
 };
 
@@ -146,6 +146,7 @@ gst_egueb_demux_get_property (GObject * object, guint prop_id, GValue * value,
   switch (prop_id) {
     case PROP_CONTAINER_WIDTH:
     case PROP_CONTAINER_HEIGHT:
+    case PROP_BACKGROUND_COLOR:
       g_object_get_property (G_OBJECT (thiz->src),
           g_param_spec_get_name (pspec), value);
       break;
@@ -169,6 +170,7 @@ gst_egueb_demux_set_property (GObject * object, guint prop_id,
     /* forwarded properties */
     case PROP_CONTAINER_WIDTH:
     case PROP_CONTAINER_HEIGHT:
+    case PROP_BACKGROUND_COLOR:
       g_object_set_property (G_OBJECT (thiz->src),
           g_param_spec_get_name (pspec), value);
       break;
@@ -226,6 +228,10 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
       g_param_spec_uint ("height", "Height",
           "Container height", 1, G_MAXUINT, 256,
           G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_BACKGROUND_COLOR,
+      g_param_spec_uint ("background-color", "Background Color",
+          "Background color to use (big-endian ARGB)", 0, G_MAXUINT32,
+          0, G_PARAM_READWRITE));
 }
 
 static void

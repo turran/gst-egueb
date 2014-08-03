@@ -44,6 +44,7 @@ struct _GstEguebSrc
 
   GMutex *doc_lock;
   Enesim_Surface *s;
+  Enesim_Renderer *background;
   Eina_List *damages;
   gboolean done;
 
