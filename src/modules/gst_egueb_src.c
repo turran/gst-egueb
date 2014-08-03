@@ -533,6 +533,7 @@ gst_egueb_src_create (GstBaseSrc * src, guint64 offset, guint size,
     GstBuffer ** buf)
 {
   GstEguebSrc *thiz = GST_EGUEB_SRC (src);
+  GstFlowReturn ret;
   GstClockID id;
   GstBuffer *outbuf = NULL;
   GstClockTime next;
@@ -588,13 +589,17 @@ gst_egueb_src_create (GstBaseSrc * src, guint64 offset, guint size,
   /* We need to check downstream if the caps have changed so we can
    * allocate an optimus size of surface
    */
-  gst_pad_alloc_buffer_and_set_caps (GST_BASE_SRC_PAD (src), src->offset,
+  ret = gst_pad_alloc_buffer_and_set_caps (GST_BASE_SRC_PAD (src), src->offset,
       buffer_size, GST_PAD_CAPS (GST_BASE_SRC_PAD (src)), &outbuf);
-  new_buffer_size = GST_BUFFER_SIZE (outbuf);
-  buffer_size = gst_egueb_src_get_size (thiz);
-  if (new_buffer_size != buffer_size) {
-    GST_ERROR_OBJECT (thiz, "different size %d %d", new_buffer_size, buffer_size);
-    gst_buffer_unref (outbuf);
+  if (ret == GST_FLOW_OK) {
+    new_buffer_size = GST_BUFFER_SIZE (outbuf);
+    buffer_size = gst_egueb_src_get_size (thiz);
+    if (new_buffer_size != buffer_size) {
+      GST_ERROR_OBJECT (thiz, "different size %d %d", new_buffer_size, buffer_size);
+      gst_buffer_unref (outbuf);
+      outbuf = NULL;
+    }
+  } else {
     outbuf = NULL;
   }
 
