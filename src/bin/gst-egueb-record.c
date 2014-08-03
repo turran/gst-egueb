@@ -79,6 +79,7 @@ static gboolean eguebdemux_buffer_probe_cb(GstPad * pad, GstBuffer * buffer, gpo
 			encoder = 0;
 		}
 	}
+
 	sink_str = g_strdup_printf(encoders[encoder].sink, outname);
 	sink = gst_parse_bin_from_description(sink_str, TRUE, &err);
 	if (!sink)
@@ -110,7 +111,8 @@ static void uridecodebin_pad_added_cb(GstElement *src, GstPad *pad, gpointer *da
 	GstPad *sinkpad, *srcpad;
 
 	demuxer = gst_element_factory_make("eguebdemux", NULL);
-	g_object_set(demuxer, "width", width, "height", height, NULL);
+	g_object_set(demuxer, "width", width, "height", height,
+			"background-color", 0xffffffff, NULL);
 	sinkpad = gst_element_get_static_pad(demuxer, "sink");
 	srcpad = gst_element_get_static_pad(demuxer, "video");
 
