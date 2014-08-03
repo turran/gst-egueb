@@ -61,7 +61,23 @@ static gboolean eguebdemux_buffer_probe_cb(GstPad * pad, GstBuffer * buffer, gpo
 	if (!first_buffer) return TRUE;
 
 	/* create the sink branch */
-	encoder = 1;
+	/* check for the duration, etc and decide an encoder */
+	if (encoder < 0)
+	{
+		GstFormat format = GST_FORMAT_TIME;
+		gint64 duration = -1;
+		gboolean ret;
+
+		ret = gst_pad_query_duration(pad, &format, &duration);
+		if (ret && GST_CLOCK_TIME_IS_VALID(duration))
+		{
+			encoder = 1;
+		}
+		else
+		{
+			encoder = 0;
+		}
+	}
 	sink_str = g_strdup_printf(encoders[encoder].sink, outname);
 	sink = gst_parse_bin_from_description(sink_str, TRUE, &err);
 	if (!sink)
@@ -101,8 +117,8 @@ static void uridecodebin_pad_added_cb(GstElement *src, GstPad *pad, gpointer *da
 	gst_pad_link(pad, sinkpad);
 	gst_object_unref(sinkpad);
 
-	/* TODO on the first buffer sent out from the demuxer, check the duration, and create the best
-	 * sink based on it
+	/* connect our probe to check if the file has animation/scripting/etc to know
+	 * what sink to use
 	 */
 	gst_pad_add_buffer_probe(srcpad, G_CALLBACK (eguebdemux_buffer_probe_cb), NULL);
 	srcpad = gst_element_get_static_pad(demuxer, "video");
@@ -122,7 +138,7 @@ int main(int argc, char **argv)
 	GOptionContext *ctx;
 	GOptionEntry options[] = {
 		{"encoder", 'e', 0, G_OPTION_ARG_INT, &encoder,
-				"The encoder to use", "encoder"},
+				"The encoder to use (-1 = auto, 0 = png, 2 = ogg)", "VAL"},
 		{NULL}
 	};
 	GError *err = NULL;
