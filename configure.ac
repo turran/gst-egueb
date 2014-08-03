@@ -51,10 +51,13 @@ if ! $PKG_CONFIG --atleast-pkgconfig-version 0.22; then
 fi
 
 ### Checks for libraries
+gst_egueb_bin_requirements_cflags=""
+gst_egueb_bin_requirements_bins=""
+gst_egueb_bin_requirements_pc="gstreamer-0.10"
 
 gst_egueb_lib_requirements_cflags=""
 gst_egueb_lib_requirements_libs=""
-gst_egueb_lib_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom enesim"
+gst_egueb_lib_requirements_pc="gstreamer-0.10 egueb-dom enesim"
 
 gst_egueb_modules_requirements_cflags=""
 gst_egueb_modules_requirements_libs=""
@@ -67,8 +70,13 @@ AC_SUBST(GST_MAJORMINOR)
 AC_SUBST([gst_egueb_lib_requirements])
 AC_SUBST([gst_egueb_lib_requirements_private])
 
+PKG_CHECK_MODULES([GST_EGUEB_BIN], [${gst_egueb_bin_requirements_pc}])
 PKG_CHECK_MODULES([GST_EGUEB_LIB], [${gst_egueb_lib_requirements_pc}])
 PKG_CHECK_MODULES([GST_EGUEB_MODULES], [${gst_egueb_modules_requirements_pc}])
+
+GST_EGUEB_BIN_CFLAGS="${GST_EGUEB_BIN_CFLAGS} ${gst_egueb_bin_requirements_cflags}"
+GST_EGUEB_LIB_CFLAGS="${GST_EGUEB_LIB_CFLAGS} ${gst_egueb_lib_requirements_cflags}"
+GST_EGUEB_MODULES_CFLAGS="${GST_EGUEB_MODULES_CFLAGS} ${gst_egueb_modules_requirements_cflags}"
 
 ## TODO Dependencies for the modules
 

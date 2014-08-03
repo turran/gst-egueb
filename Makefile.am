@@ -23,9 +23,13 @@ m4/ltoptions.m4 \
 m4/ltsugar.m4 \
 m4/ltversion.m4
 
+bin_PROGRAMS =
 lib_LTLIBRARIES =
 check_PROGRAMS =
 EXTRA_DIST =
+
+### Binaries
+include src/bin/Makefile.mk
 
 ### Library
 include src/lib/Makefile.mk
