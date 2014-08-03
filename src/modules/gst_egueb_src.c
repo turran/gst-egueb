@@ -93,8 +93,10 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
   thiz->render = render;
   thiz->window = window;
   /* set the uri */
-  uri = egueb_dom_string_new_with_string(thiz->location);
-  egueb_dom_document_uri_set(thiz->doc, uri);
+  if (thiz->location) {
+    uri = egueb_dom_string_new_with_string(thiz->location);
+    egueb_dom_document_uri_set(thiz->doc, uri);
+  }
 
   /* optional features */
   ui = egueb_dom_node_feature_get(thiz->doc,
