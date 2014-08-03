@@ -349,10 +349,18 @@ gst_egueb_src_event (GstBaseSrc * src, GstEvent * event)
 static gboolean
 gst_egueb_src_query (GstBaseSrc * src, GstQuery * query)
 {
+  GstEguebSrc *thiz = GST_EGUEB_SRC (src);
   gboolean ret = FALSE;
 
   GST_DEBUG ("query %s", GST_QUERY_TYPE_NAME (query));
   switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_DURATION:
+    if (thiz->last_stop >= 0) {
+      gst_query_set_duration(query, GST_FORMAT_TIME, thiz->last_stop); 
+      ret = TRUE;
+    }
+    break;
+
     default:
     break;
   }
