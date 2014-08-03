@@ -167,6 +167,9 @@ gst_egueb_xml_sink_sink_event (GstPad * pad, GstEvent * event)
       /* get the location */
       peer = gst_pad_get_peer (pad);
       uri = gst_egueb_xml_sink_location_get (peer);
+      if (!uri) {
+        GST_WARNING_OBJECT (thiz, "Impossible to get the location");
+      }
       gst_object_unref (peer);
 
       message = gst_message_new_element (GST_OBJECT (thiz),
