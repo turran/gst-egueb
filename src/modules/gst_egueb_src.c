@@ -51,6 +51,7 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
   Egueb_Dom_Node *doc = NULL;
   Egueb_Dom_Feature *render, *window, *ui;
   Egueb_Dom_String *uri;
+  gchar *data;
 
   /* check if we have a valid xml */
   if (!thiz->xml) {
@@ -59,8 +60,10 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
   }
 
   /* parse the document */
-  s = enesim_stream_buffer_new (GST_BUFFER_DATA (thiz->xml),
-      GST_BUFFER_SIZE (thiz->xml));
+  data = malloc(GST_BUFFER_SIZE (thiz->xml));
+  memcpy (data, GST_BUFFER_DATA (thiz->xml), GST_BUFFER_SIZE (thiz->xml));
+  /* the stream will free the data */
+  s = enesim_stream_buffer_new (data, GST_BUFFER_SIZE (thiz->xml));
 
   egueb_dom_parser_parse (s, &doc);
   enesim_stream_unref (s);
