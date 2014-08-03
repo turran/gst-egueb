@@ -546,7 +546,12 @@ gst_egueb_src_create (GstBaseSrc * src, guint64 offset, guint size,
   if (thiz->animation) {
     Egueb_Smil_Clock clock;
 
-    if (egueb_smil_feature_animation_duration_get(thiz->animation, &clock)) {
+    if (!egueb_smil_feature_animation_has_animations(thiz->animation)) {
+      if (thiz->last_ts > 0) {
+        GST_DEBUG ("No animations found, nothing else to push");
+        return GST_FLOW_UNEXPECTED;
+      }
+    } else if (egueb_smil_feature_animation_duration_get(thiz->animation, &clock)) {
       if (thiz->last_stop < clock) {
         gst_base_src_new_seamless_segment (src, 0, clock, thiz->last_ts); 
       } else if (thiz->last_stop > clock) {
