@@ -143,7 +143,7 @@ int main(int argc, char **argv)
 				"The encoder to use (-1 = auto, 0 = png, 2 = ogg)", "VAL"},
 		{"width", 'w', 0, G_OPTION_ARG_INT, &width,
 				"The width to use for the container", "VAL"},
-		{"height", 'h', 0, G_OPTION_ARG_INT, &width,
+		{"height", 'h', 0, G_OPTION_ARG_INT, &height,
 				"The height to use for the container", "VAL"},
 		{NULL}
 	};
