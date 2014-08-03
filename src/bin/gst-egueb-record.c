@@ -29,7 +29,6 @@ Gst_Egueb_Record_Encoder encoders[] = {
 
 static void pipeline_eos_cb(GstBus *bus, GstMessage *msg, gpointer *data)
 {
-	printf("eos received\n");
 	gst_element_set_state(pipeline, GST_STATE_READY);
 	g_main_loop_quit(main_loop);
 }
