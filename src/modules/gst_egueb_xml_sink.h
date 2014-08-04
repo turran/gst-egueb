@@ -32,7 +32,7 @@ struct _GstEguebXmlSinkClass
   GstElementClass parent_class;
 };
 
-GType gst_egueb_xml_get_type (void);
+GType gst_egueb_xml_sink_get_type (void);
 
 G_END_DECLS
 
