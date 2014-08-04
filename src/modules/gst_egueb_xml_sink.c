@@ -142,6 +142,26 @@ gst_egueb_xml_sink_location_get (GstPad * pad)
   return uri;
 }
 
+static gchar *
+gst_egueb_xml_sink_uri_get (GstPad * pad)
+{
+  GstQuery *query;
+  gchar *uri = NULL;
+  gboolean ret;
+
+  query = gst_query_new_uri ();
+  if (gst_pad_query (pad, query)) {
+    gst_query_parse_uri (query, &uri);
+  }
+
+  if (!uri) {
+    uri = gst_egueb_xml_sink_location_get (pad);
+  }
+  gst_query_unref (query);
+
+  return uri;
+}
+
 static gboolean
 gst_egueb_xml_sink_sink_event (GstPad * pad, GstEvent * event)
 {
@@ -166,9 +186,11 @@ gst_egueb_xml_sink_sink_event (GstPad * pad, GstEvent * event)
       buf = gst_adapter_take_buffer (thiz->adapter, len);
       /* get the location */
       peer = gst_pad_get_peer (pad);
-      uri = gst_egueb_xml_sink_location_get (peer);
+      uri = gst_egueb_xml_sink_uri_get (peer);
       if (!uri) {
-        GST_WARNING_OBJECT (thiz, "Impossible to get the location");
+        GST_WARNING_OBJECT (thiz, "Impossible to get the uri");
+      } else {
+        GST_DEBUG_OBJECT (thiz, "URI '%s' found", uri);
       }
       gst_object_unref (peer);
 
