@@ -49,8 +49,14 @@
 
 EAPI void gst_egueb_init(void);
 EAPI void gst_egueb_shutdown(void);
+
 EAPI Egueb_Dom_Video_Provider * gst_egueb_video_provider_new(
 		const Egueb_Dom_Video_Provider_Notifier *notifier,
 		Enesim_Renderer *image, Egueb_Dom_Node *n);
+
+typedef struct _Gst_Egueb_Document Gst_Egueb_Document;
+EAPI Gst_Egueb_Document * gst_egueb_document_new(Egueb_Dom_Node *doc);
+EAPI void gst_egueb_document_free(Gst_Egueb_Document *thiz);
+EAPI void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz);
 
 #endif

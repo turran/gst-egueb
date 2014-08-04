@@ -5,6 +5,7 @@ dist_installed_headers_DATA = \
 src/lib/Gst_Egueb.h
 
 src_lib_libgstegueb_la_SOURCES = \
+src/lib/gst_egueb_document.c \
 src/lib/gst_egueb_video_provider.c \
 src/lib/gst_egueb_main.c
 

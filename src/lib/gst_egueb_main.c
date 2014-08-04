@@ -16,24 +16,38 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <Egueb_Dom.h>
-#include <gst/gst.h>
-
+#include "gst_egueb_private.h"
+#include "Gst_Egueb.h"
 /*============================================================================*
  *                                  Local                                     *
  *============================================================================*/
+static int _init = 0;
 /*============================================================================*
  *                                 Global                                     *
  *============================================================================*/
+int gst_egueb_log = -1;
 /*============================================================================*
  *                                   API                                      *
  *============================================================================*/
 EAPI void gst_egueb_init(void)
 {
-	gst_init(NULL, NULL);
+	if (!_init++)
+	{
+		eina_init();
+		gst_egueb_log = eina_log_domain_register("gst-egueb", GST_EGUEB_LOG_COLOR_DEFAULT);
+		egueb_dom_init();
+		gst_init(NULL, NULL);
+	}
 }
 
 EAPI void gst_egueb_shutdown(void)
 {
-	gst_deinit();
+	if (_init == 1)
+	{
+		gst_deinit();
+		egueb_dom_shutdown();
+		eina_log_domain_unregister(gst_egueb_log);
+		eina_shutdown();
+	}
+	_init--;
 }

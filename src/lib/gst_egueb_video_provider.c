@@ -16,34 +16,11 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <Egueb_Dom.h>
-#include <gst/gst.h>
+#include "gst_egueb_private.h"
+#include "Gst_Egueb.h"
 /*============================================================================*
  *                                  Local                                     *
  *============================================================================*/
-#define GST_EGUEB_LOG_COLOR_DEFAULT EINA_COLOR_ORANGE
-/* Whenever a file needs to generate a log, it must declare this first */
-
-#ifdef ERR
-# undef ERR
-#endif
-#define ERR(...) EINA_LOG_DOM_ERR(_egueb_svg_video_provider_gstreamer_log, __VA_ARGS__)
-
-#ifdef WARN
-# undef WARN
-#endif
-#define WARN(...) EINA_LOG_DOM_WARN(_egueb_svg_video_provider_gstreamer_log, __VA_ARGS__)
-
-#ifdef INFO
-# undef INFO
-#endif
-#define INFO(...) EINA_LOG_DOM_INFO(_egueb_svg_video_provider_gstreamer_log, __VA_ARGS__)
-
-#ifdef DBG
-# undef DBG
-#endif
-#define DBG(...) EINA_LOG_DOM_DBG(_egueb_svg_video_provider_gstreamer_log, __VA_ARGS__)
-
 #if 0
 /* FIXME we still need to register the log domain */
 static int _egueb_svg_video_provider_gstreamer_log = -1;
