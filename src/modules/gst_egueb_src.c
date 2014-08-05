@@ -112,11 +112,10 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
 
   thiz->animation = egueb_dom_node_feature_get(thiz->doc,
       EGUEB_SMIL_FEATURE_ANIMATION_NAME, NULL);
-  thiz->io = egueb_dom_node_feature_get(thiz->doc,
-      EGUEB_DOM_FEATURE_IO_NAME, NULL);
-  /* TODO for now we make the feature itself handle the io */
-  if (thiz->io)
-    egueb_dom_feature_io_default_enable(thiz->io, EINA_TRUE);
+
+  /* setup our own gst egueb document */
+  thiz->gdoc = gst_egueb_document_new (egueb_dom_node_ref(thiz->doc));
+  gst_egueb_document_feature_io_setup (thiz->gdoc);
 
   return TRUE;
 }
@@ -131,11 +130,6 @@ gst_egueb_src_cleanup (GstEguebSrc * thiz)
   }
 
   /* optional features */
-  if (thiz->io) {
-    egueb_dom_feature_unref(thiz->io);
-    thiz->io = NULL;
-  }
-
   if (thiz->animation) {
     egueb_dom_feature_unref(thiz->animation);
     thiz->animation = NULL;
@@ -156,6 +150,10 @@ gst_egueb_src_cleanup (GstEguebSrc * thiz)
     thiz->doc = NULL;
   }
 
+  if (thiz->gdoc) {
+    gst_egueb_document_free (thiz->gdoc);
+    thiz->gdoc = NULL;
+  }
 
   if (thiz->location) {
     g_free (thiz->location);
@@ -804,6 +802,7 @@ static void
 gst_egueb_src_init (GstEguebSrc * thiz,
     GstEguebSrcClass * g_class)
 {
+  gst_egueb_init ();
   egueb_dom_init ();
   egueb_smil_init ();
   /* make it work in time */

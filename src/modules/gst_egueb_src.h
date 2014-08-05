@@ -9,6 +9,8 @@
 #include <Egueb_Dom.h>
 #include <Egueb_Smil.h>
 
+#include "Gst_Egueb.h"
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_EGUEB_SVG_SRC            (gst_egueb_src_get_type())
@@ -41,6 +43,8 @@ struct _GstEguebSrc
   Egueb_Dom_Feature *io;
 
   Egueb_Dom_Input *input;
+
+  Gst_Egueb_Document *gdoc;
 
   GMutex *doc_lock;
   Enesim_Surface *s;
