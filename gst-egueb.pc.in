@@ -8,8 +8,8 @@ pkgincludedir=@pkgincludedir@-@VMAJ@
 
 Name: Gst Egueb
 Description: GStreamer based lib for Egueb
-Requires.private: @gst_egueb_lib_requirements_private@
-Requires: @gst_egueb_lib_requirements@
+Requires.private: @gst_egueb_lib_requirements_pc_private@
+Requires: @gst_egueb_lib_requirements_pc@
 Version: @VERSION@
 Libs: -L${libdir} -lgstegueb
 Cflags: -I${pkgincludedir}

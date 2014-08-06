@@ -53,8 +53,8 @@ $(SED) \
 -e 's,@includedir\@,$(includedir),g' \
 -e 's,@pkgincludedir\@,$(pkgincludedir),g' \
 -e 's,@pkglibdir\@,$(pkglibdir),g' \
--e 's,@gst_egueb_requirements_private\@,$(gst_egueb_requirements_private),g' \
--e 's,@gst_egueb_requirements\@,$(gst_egueb_requirements),g' \
+-e 's,@gst_egueb_lib_requirements_pc_private\@,$(gst_egueb_lib_requirements_pc_private),g' \
+-e 's,@gst_egueb_lib_requirements_pc\@,$(gst_egueb_lib_requirements_pc),g' \
 < $< > $@ || rm $@
 
 pc_verbose = $(pc_verbose_@AM_V@)

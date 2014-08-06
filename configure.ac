@@ -58,6 +58,7 @@ gst_egueb_bin_requirements_pc="gstreamer-0.10"
 gst_egueb_lib_requirements_cflags=""
 gst_egueb_lib_requirements_libs=""
 gst_egueb_lib_requirements_pc="gstreamer-0.10 egueb-dom enesim"
+gst_egueb_lib_requirements_pc_private=""
 
 gst_egueb_modules_requirements_cflags=""
 gst_egueb_modules_requirements_libs=""
@@ -67,8 +68,8 @@ dnl make GST_MAJORMINOR available in Makefile.am
 GST_MAJORMINOR=0.10
 AC_SUBST(GST_MAJORMINOR)
 
-AC_SUBST([gst_egueb_lib_requirements])
-AC_SUBST([gst_egueb_lib_requirements_private])
+AC_SUBST([gst_egueb_lib_requirements_pc])
+AC_SUBST([gst_egueb_lib_requirements_pc_private])
 
 PKG_CHECK_MODULES([GST_EGUEB_BIN], [${gst_egueb_bin_requirements_pc}])
 PKG_CHECK_MODULES([GST_EGUEB_LIB], [${gst_egueb_lib_requirements_pc}])
