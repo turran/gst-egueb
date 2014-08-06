@@ -67,7 +67,6 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
   s = enesim_stream_buffer_new (data, GST_BUFFER_SIZE (thiz->xml));
 
   egueb_dom_parser_parse (s, &doc);
-  enesim_stream_unref (s);
 
   if (!doc) {
     GST_ERROR_OBJECT (thiz, "Failed parsing the document");
