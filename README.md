@@ -8,6 +8,11 @@ It provides:
   + eguebdemux: Egueb XML Parser/Demuxer/Decoder
 + A video provider interface implementation based on GStreamer
 
+Dependencies
+============
++ [Egueb](https://wwww.github.com/turran/egueb)
++ GStreamer
+
 What can I do with it?
 ======================
 With the elements you can build a pipeline like this:
@@ -21,4 +26,8 @@ You will get the svg file rendered with animations, scripting, user navigation, 
 
 The video provider interface let's you implement any <video> tag for your own XML dialect based on Egüeb. Right now it used to
 provide multimedia on SVG files following the SVG Tiny spec.
+
+Communication
+=============
+In case something fails, use this github project to create an issue, or if you prefer, you can go to #enesim on the freenode IRC server.
 
