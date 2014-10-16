@@ -1,4 +1,5 @@
 #include "gst_egueb_demux.h"
+#include "gst_egueb_src.h"
 #include "gst_egueb_type.h"
 
 GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
@@ -47,6 +48,22 @@ enum
 };
 
 GST_BOILERPLATE (GstEguebDemux, gst_egueb_demux, GstBin, GST_TYPE_BIN);
+
+static gboolean
+gst_egueb_demux_install_property (GObjectClass * klass, GObjectClass * from,
+    guint id, const gchar *name)
+{
+  GParamSpec *pspec;
+  GParamSpec *npspec;
+
+  pspec = g_object_class_find_property(from, name);
+  if (!pspec) return FALSE;
+
+  npspec = g_param_spec_internal (G_PARAM_SPEC_TYPE (pspec), pspec->name,
+      g_param_spec_get_nick (pspec), g_param_spec_get_blurb (pspec), pspec->flags);
+  g_object_class_install_property (klass, id, npspec);
+  return TRUE;
+}
 
 static gboolean
 gst_egueb_demux_handle_sink_message_sync (GstEguebDemux * thiz,
@@ -202,6 +219,7 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
   GstBinClass *gstbin_class = GST_BIN_CLASS (klass);
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GObjectClass *egueb_src_class;
 
   parent_class = g_type_class_peek_parent (klass);
 
@@ -220,18 +238,16 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
 
   /* Register signals */
   /* Register properties */
-  g_object_class_install_property (gobject_class, PROP_CONTAINER_WIDTH,
-      g_param_spec_uint ("width", "Width",
-          "Container width", 1, G_MAXUINT, 256,
-          G_PARAM_READWRITE));
-  g_object_class_install_property (gobject_class, PROP_CONTAINER_HEIGHT,
-      g_param_spec_uint ("height", "Height",
-          "Container height", 1, G_MAXUINT, 256,
-          G_PARAM_READWRITE));
-  g_object_class_install_property (gobject_class, PROP_BACKGROUND_COLOR,
-      g_param_spec_uint ("background-color", "Background Color",
-          "Background color to use (big-endian ARGB)", 0, G_MAXUINT32,
-          0, G_PARAM_READWRITE));
+  /* Forwarded properties */
+  egueb_src_class = g_type_class_ref(GST_TYPE_EGUEB_SRC);
+  printf("%p\n", egueb_src_class);
+  gst_egueb_demux_install_property (gobject_class, egueb_src_class,
+      PROP_CONTAINER_WIDTH, "width");
+  gst_egueb_demux_install_property (gobject_class, egueb_src_class,
+      PROP_CONTAINER_HEIGHT, "height");
+  gst_egueb_demux_install_property (gobject_class, egueb_src_class,
+      PROP_BACKGROUND_COLOR, "background-color");
+  g_type_class_unref (egueb_src_class);
 }
 
 static void

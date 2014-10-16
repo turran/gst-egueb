@@ -25,10 +25,10 @@ plugin_init (GstPlugin * plugin)
           GST_RANK_MARGINAL, GST_TYPE_EGUEB_XML_SINK))
     return FALSE;
   if (!gst_element_register (plugin, "eguebsrc",
-          GST_RANK_MARGINAL, GST_TYPE_EGUEB_SVG_SRC))
+          GST_RANK_MARGINAL, GST_TYPE_EGUEB_SRC))
     return FALSE;
   if (!gst_element_register (plugin, "eguebdemux",
-          GST_RANK_PRIMARY + 1, GST_TYPE_EGUEB_SVG))
+          GST_RANK_PRIMARY + 1, GST_TYPE_EGUEB_DEMUX))
     return FALSE;
 
   return TRUE;

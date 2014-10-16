@@ -21,12 +21,6 @@
 /*============================================================================*
  *                                  Local                                     *
  *============================================================================*/
-#if 0
-/* FIXME we still need to register the log domain */
-static int _egueb_svg_video_provider_gstreamer_log = -1;
-#endif
-
-
 typedef struct _Gst_Egueb_Video_Provider
 {
 	Egueb_Dom_Video_Provider *vp;

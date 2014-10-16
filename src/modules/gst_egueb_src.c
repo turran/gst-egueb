@@ -233,7 +233,8 @@ gst_egueb_src_convert (GstEguebSrc * thiz, GstBuffer **buffer)
     GstBuffer *b;
 
     sdata.xrgb8888.plane0_stride = GST_ROUND_UP_4 (thiz->w * 4);
-    sdata.xrgb8888.plane0 = g_new(guint8, sdata.xrgb8888.plane0_stride * thiz->h);
+    sdata.xrgb8888.plane0 = (uint32_t *) g_new(guint8,
+        sdata.xrgb8888.plane0_stride * thiz->h);
 
     eb = enesim_buffer_new_data_from (ENESIM_BUFFER_FORMAT_XRGB8888, thiz->w,
         thiz->h, EINA_FALSE, &sdata, gst_egueb_src_buffer_free, NULL);
@@ -251,7 +252,7 @@ gst_egueb_src_convert (GstEguebSrc * thiz, GstBuffer **buffer)
     Enesim_Buffer_Sw_Data sdata;
 
     sdata.xrgb8888.plane0_stride = GST_ROUND_UP_4 (thiz->w * 4);
-    sdata.xrgb8888.plane0 = GST_BUFFER_DATA (*buffer);
+    sdata.xrgb8888.plane0 = (uint32_t *) GST_BUFFER_DATA (*buffer);
     eb = enesim_buffer_new_data_from (ENESIM_BUFFER_FORMAT_XRGB8888, thiz->w,
         thiz->h, EINA_FALSE, &sdata, NULL, NULL);
   }
@@ -815,7 +816,7 @@ gst_egueb_src_init (GstEguebSrc * thiz,
   thiz->container_w = 256;
   thiz->container_h = 256;
   thiz->background = enesim_renderer_background_new();
-  enesim_renderer_background_color_set (thiz->background, 0x00000000);
+  enesim_renderer_background_color_set (thiz->background, 0xffffffff);
 }
 
 static void

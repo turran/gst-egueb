@@ -5,17 +5,17 @@
 
 G_BEGIN_DECLS
 
-#define GST_TYPE_EGUEB_SVG            (gst_egueb_demux_get_type())
+#define GST_TYPE_EGUEB_DEMUX            (gst_egueb_demux_get_type())
 #define GST_EGUEB_DEMUX(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj),\
-                                         GST_TYPE_EGUEB_SVG, GstEguebDemux))
+                                         GST_TYPE_EGUEB_DEMUX, GstEguebDemux))
 #define GST_EGUEB_DEMUX_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST((klass),\
-                                         GST_TYPE_EGUEB_SVG, GstEguebDemuxClass))
+                                         GST_TYPE_EGUEB_DEMUX, GstEguebDemuxClass))
 #define GST_EGUEB_DEMUX_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),\
-                                         GST_TYPE_EGUEB_SVG, GstEguebDemuxClass))
+                                         GST_TYPE_EGUEB_DEMUX, GstEguebDemuxClass))
 #define GST_IS_EGUEB_DEMUX(obj)         (G_TYPE_CHECK_INSTANCE_TYPE((obj),\
-                                         GST_TYPE_EGUEB_SVG))
+                                         GST_TYPE_EGUEB_DEMUX))
 #define GST_IS_EGUEB_DEMUX_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),\
-                                         GST_TYPE_EGUEB_SVG))
+                                         GST_TYPE_EGUEB_DEMUX))
 typedef struct _GstEguebDemux GstEguebDemux;
 typedef struct _GstEguebDemuxClass GstEguebDemuxClass;
 

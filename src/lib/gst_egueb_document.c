@@ -18,6 +18,9 @@
 
 #include "gst_egueb_private.h"
 #include "Gst_Egueb.h"
+
+/* we will read in 4k blocks */
+#define BUFFER_SIZE 4096
 /*============================================================================*
  *                                  Local                                     *
  *============================================================================*/
@@ -34,9 +37,9 @@ typedef struct _Gst_Egueb_Document_Pipeline
 	/* data needed for the data event */
 	Eina_Binbuf *binbuf;
 	/* data needed for the image event */
+	Enesim_Stream *s;
+	void *stream_mmap;
 	/* the enesim stream mmap */
-	void *stream_data;
-	size_t stream_length;
 	Enesim_Surface *surface;
 	gboolean buffer_pushed;
 } Gst_Egueb_Document_Pipeline;
@@ -135,7 +138,7 @@ _gst_egueb_document_image_fakesink_handoff_cb (GstElement * object,
 	/* create the surface based on the buffer data */
 	/* the data is not premultiplied, we need to do it */
 	/* TODO we could add the xrgb caps so for jpegs there's no need to premultiply */
-	edata.argb8888.plane0 = GST_BUFFER_DATA(buf);
+	edata.argb8888.plane0 = (uint32_t *)GST_BUFFER_DATA(buf);
 	edata.argb8888.plane0_stride = GST_ROUND_UP_4(width * 4);
 
 	ebuf = enesim_buffer_new_data_from(ENESIM_BUFFER_FORMAT_ARGB8888,
@@ -234,23 +237,45 @@ static void _gst_egueb_document_image_appsrc_need_data_cb (
 	Gst_Egueb_Document_Pipeline *p = data;
 	GstFlowReturn ret;
 	GstBuffer *buf;
+	size_t stream_length;
 
 	if (p->buffer_pushed)
 	{
-		DBG("Buffer already pushed, pushing the EOS");
+		DBG("Image data already pushed, pushing the EOS");
+		if (p->stream_mmap)
+			enesim_stream_munmap(p->s, p->stream_mmap);
 		g_signal_emit_by_name (src, "end-of-stream", &ret);
 		return;
 	}
 
 	DBG("Pushing the image to decode");
-	/* push the stream */
-	buf = gst_buffer_new();
-	GST_BUFFER_DATA(buf) = (gchar *)p->stream_data;
-	GST_BUFFER_SIZE(buf) = p->stream_length;
+	p->stream_mmap = enesim_stream_mmap(p->s, &stream_length);
+	if (p->stream_mmap)
+	{
+		/* push the stream */
+		buf = gst_buffer_new();
+		GST_BUFFER_DATA(buf) = (gchar *)p->stream_mmap;
+		GST_BUFFER_SIZE(buf) = stream_length;
+		p->buffer_pushed = TRUE;
+	}
+	else
+	{
+		ssize_t written;
+
+		buf = gst_buffer_new_and_alloc(BUFFER_SIZE);
+		written = enesim_stream_read(p->s, GST_BUFFER_DATA(buf), BUFFER_SIZE);
+		if (written <= 0)
+		{
+			gst_buffer_unref(buf);
+			p->buffer_pushed = TRUE;
+			g_signal_emit_by_name (src, "end-of-stream", &ret);
+			return;
+		}
+		GST_BUFFER_SIZE(buf) = written;
+	}
 
 	/* push the buffer and the end of stream at once */
 	g_signal_emit_by_name (src, "push-buffer", buf, &ret);
-	p->buffer_pushed = TRUE;
 }
 /*----------------------------------------------------------------------------*
  *                               IO interface                                 *
@@ -350,7 +375,7 @@ static void _gst_egueb_document_feature_io_image_cb(Egueb_Dom_Event *ev, void *d
 	/* setup our own pipe */
 	pipe.pipeline = pipeline;
 	pipe.surface = NULL;
-	pipe.stream_data = enesim_stream_mmap(s, &pipe.stream_length);
+	pipe.s = s;
 	pipe.buffer_pushed = FALSE;
 	pipe.done = FALSE;
 
@@ -389,7 +414,6 @@ static void _gst_egueb_document_feature_io_image_cb(Egueb_Dom_Event *ev, void *d
 
 	/* finish */
 	egueb_dom_event_io_image_finish(ev, pipe.surface);
-	enesim_stream_munmap(s, pipe.stream_data);
 	enesim_stream_unref(s);
 }
 

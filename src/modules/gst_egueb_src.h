@@ -13,17 +13,17 @@
 
 G_BEGIN_DECLS
 
-#define GST_TYPE_EGUEB_SVG_SRC            (gst_egueb_src_get_type())
+#define GST_TYPE_EGUEB_SRC            (gst_egueb_src_get_type())
 #define GST_EGUEB_SRC(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj),\
-                                         GST_TYPE_EGUEB_SVG_SRC, GstEguebSrc))
+                                         GST_TYPE_EGUEB_SRC, GstEguebSrc))
 #define GST_EGUEB_SRC_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST((klass),\
-                                         GST_TYPE_EGUEB_SVG_SRC, GstEguebSrcClass))
+                                         GST_TYPE_EGUEB_SRC, GstEguebSrcClass))
 #define GST_EGUEB_SRC_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),\
-                                         GST_TYPE_EGUEB_SVG_SRC, GstEguebSrcClass))
+                                         GST_TYPE_EGUEB_SRC, GstEguebSrcClass))
 #define GST_IS_EGUEB_SRC(obj)         (G_TYPE_CHECK_INSTANCE_TYPE((obj),\
-                                         GST_TYPE_EGUEB_SVG_SRC))
+                                         GST_TYPE_EGUEB_SRC))
 #define GST_IS_EGUEB_SRC_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),\
-                                         GST_TYPE_EGUEB_SVG_SRC))
+                                         GST_TYPE_EGUEB_SRC))
 typedef struct _GstEguebSrc GstEguebSrc;
 typedef struct _GstEguebSrcClass GstEguebSrcClass;
 

@@ -1,2 +1,1 @@
-+ Add code to share properties from the src to the demuxer
 + Do not install the lib, move it to the modules for now
