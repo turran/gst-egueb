@@ -22,29 +22,8 @@
 #include <Egueb_Dom.h>
 #include <gst/gst.h>
 
-#define GST_EGUEB_LOG_COLOR_DEFAULT EINA_COLOR_ORANGE
-/* Whenever a file needs to generate a log, it must declare this first */
-
-#ifdef ERR
-# undef ERR
-#endif
-#define ERR(...) EINA_LOG_DOM_ERR(gst_egueb_log, __VA_ARGS__)
-
-#ifdef WARN
-# undef WARN
-#endif
-#define WARN(...) EINA_LOG_DOM_WARN(gst_egueb_log, __VA_ARGS__)
-
-#ifdef INFO
-# undef INFO
-#endif
-#define INFO(...) EINA_LOG_DOM_INFO(gst_egueb_log, __VA_ARGS__)
-
-#ifdef DBG
-# undef DBG
-#endif
-#define DBG(...) EINA_LOG_DOM_DBG(gst_egueb_log, __VA_ARGS__)
-
-extern int gst_egueb_log;
+Gst_Egueb_Document * gst_egueb_document_new(Egueb_Dom_Node *doc);
+void gst_egueb_document_free(Gst_Egueb_Document *thiz);
+void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz);
 
 #endif

@@ -429,10 +429,7 @@ static void _gst_egueb_document_feature_io_cleanup(Gst_Egueb_Document *thiz)
 /*============================================================================*
  *                                 Global                                     *
  *============================================================================*/
-/*============================================================================*
- *                                   API                                      *
- *============================================================================*/
-EAPI Gst_Egueb_Document * gst_egueb_document_new(Egueb_Dom_Node *doc)
+Gst_Egueb_Document * gst_egueb_document_new(Egueb_Dom_Node *doc)
 {
 	Gst_Egueb_Document *thiz;
 
@@ -443,7 +440,7 @@ EAPI Gst_Egueb_Document * gst_egueb_document_new(Egueb_Dom_Node *doc)
 	return thiz;
 }
 
-EAPI void gst_egueb_document_free(Gst_Egueb_Document *thiz)
+void gst_egueb_document_free(Gst_Egueb_Document *thiz)
 {
 	if (!thiz) return;
 
@@ -463,7 +460,7 @@ EAPI void gst_egueb_document_free(Gst_Egueb_Document *thiz)
 	free(thiz);
 }
 
-EAPI void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz)
+void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz)
 {
 	Egueb_Dom_Feature *feature;
 
@@ -480,3 +477,6 @@ EAPI void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz)
 			EINA_TRUE, thiz);
 	thiz->io = feature;
 }
+/*============================================================================*
+ *                                   API                                      *
+ *============================================================================*/
