@@ -9,7 +9,7 @@
 #include <Egueb_Dom.h>
 #include <Egueb_Smil.h>
 
-#include "Gst_Egueb.h"
+#include "gst_egueb_document.h"
 
 G_BEGIN_DECLS
 

@@ -240,7 +240,6 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
   /* Register properties */
   /* Forwarded properties */
   egueb_src_class = g_type_class_ref(GST_TYPE_EGUEB_SRC);
-  printf("%p\n", egueb_src_class);
   gst_egueb_demux_install_property (gobject_class, egueb_src_class,
       PROP_CONTAINER_WIDTH, "width");
   gst_egueb_demux_install_property (gobject_class, egueb_src_class,

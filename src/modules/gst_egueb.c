@@ -11,7 +11,7 @@
 GST_DEBUG_CATEGORY (gst_egueb_xml_sink_debug);
 GST_DEBUG_CATEGORY (gst_egueb_src_debug);
 GST_DEBUG_CATEGORY (gst_egueb_demux_debug);
-GST_DEBUG_CATEGORY (gst_egueb_doc_debug);
+GST_DEBUG_CATEGORY (gst_egueb_document_debug);
 
 static gboolean
 plugin_init (GstPlugin * plugin)
@@ -20,7 +20,7 @@ plugin_init (GstPlugin * plugin)
   GST_DEBUG_CATEGORY_INIT (gst_egueb_xml_sink_debug, "eguebxmlsink", 0, "Egueb XML sink");
   GST_DEBUG_CATEGORY_INIT (gst_egueb_src_debug, "eguebsrc", 0, "Egueb SVG source");
   GST_DEBUG_CATEGORY_INIT (gst_egueb_demux_debug, "eguebdemux", 0, "Egueb SVG demuxer");
-  GST_DEBUG_CATEGORY_INIT (gst_egueb_doc_debug, "eguebdoc", 0, "Egueb document");
+  GST_DEBUG_CATEGORY_INIT (gst_egueb_document_debug, "eguebdoc", 0, "Egueb document");
 
   /* now register the elements */
   if (!gst_element_register (plugin, "eguebxmlsink",

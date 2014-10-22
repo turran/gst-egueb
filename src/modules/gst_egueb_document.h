@@ -22,6 +22,8 @@
 #include <Egueb_Dom.h>
 #include <gst/gst.h>
 
+typedef struct _Gst_Egueb_Document Gst_Egueb_Document;
+
 Gst_Egueb_Document * gst_egueb_document_new(Egueb_Dom_Node *doc);
 void gst_egueb_document_free(Gst_Egueb_Document *thiz);
 void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz);

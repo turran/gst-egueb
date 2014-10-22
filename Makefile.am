@@ -31,9 +31,6 @@ EXTRA_DIST =
 ### Binaries
 include src/bin/Makefile.mk
 
-### Library
-include src/lib/Makefile.mk
-
 ### Modules
 include src/modules/Makefile.mk
 

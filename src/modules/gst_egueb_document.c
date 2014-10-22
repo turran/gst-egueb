@@ -16,8 +16,13 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "gst_egueb_private.h"
-#include "Gst_Egueb.h"
+#include <gst/gst.h>
+#include <Egueb_Dom.h>
+
+#include "gst_egueb_document.h"
+
+GST_DEBUG_CATEGORY_EXTERN (gst_egueb_document_debug);
+#define GST_CAT_DEFAULT gst_egueb_document_debug
 
 /* we will read in 4k blocks */
 #define BUFFER_SIZE 4096
@@ -59,13 +64,13 @@ static gboolean _gst_egueb_document_pipeline_process(Gst_Egueb_Document_Pipeline
 			GError *err = NULL;
 			gchar *dbg_info = NULL;
 			gst_message_parse_error(msg, &err, &dbg_info);
-			ERR("Error received on the pipeline '%s', %s'", err->message, dbg_info ? dbg_info : "none");
+			GST_ERROR("Error received on the pipeline '%s', %s'", err->message, dbg_info ? dbg_info : "none");
 			p->done = TRUE;
 			}
 			break;
 
 			case GST_MESSAGE_EOS:
-			INFO("Pipeline reached EOS");
+			GST_INFO("Pipeline reached EOS");
 			p->done = TRUE;
 			break;
 
@@ -241,14 +246,14 @@ static void _gst_egueb_document_image_appsrc_need_data_cb (
 
 	if (p->buffer_pushed)
 	{
-		DBG("Image data already pushed, pushing the EOS");
+		GST_DEBUG("Image data already pushed, pushing the EOS");
 		if (p->stream_mmap)
 			enesim_stream_munmap(p->s, p->stream_mmap);
 		g_signal_emit_by_name (src, "end-of-stream", &ret);
 		return;
 	}
 
-	DBG("Pushing the image to decode");
+	GST_DEBUG("Pushing the image to decode");
 	p->stream_mmap = enesim_stream_mmap(p->s, &stream_length);
 	if (p->stream_mmap)
 	{
@@ -303,7 +308,7 @@ static void _gst_egueb_document_feature_io_data_cb(Egueb_Dom_Event *ev, void *da
 		egueb_dom_string_unref(location);
 		if (!resolved)
 		{
-			WARN("Impossible to resolve the uri");
+			GST_WARNING("Impossible to resolve the uri");
 			egueb_dom_uri_cleanup(&uri);
 			return;
 		}
