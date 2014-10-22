@@ -32,6 +32,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_egueb_document_debug);
 struct _Gst_Egueb_Document
 {
 	Egueb_Dom_Node *doc;
+	Egueb_Dom_Node *topmost;
 	Egueb_Dom_Feature *io;
 };
 
@@ -424,10 +425,10 @@ static void _gst_egueb_document_feature_io_image_cb(Egueb_Dom_Event *ev, void *d
 
 static void _gst_egueb_document_feature_io_cleanup(Gst_Egueb_Document *thiz)
 {
-	egueb_dom_node_event_listener_remove(thiz->doc,
+	egueb_dom_node_event_listener_remove(thiz->topmost,
 			EGUEB_DOM_EVENT_IO_DATA,
 			_gst_egueb_document_feature_io_data_cb, EINA_TRUE, thiz);
-	egueb_dom_node_event_listener_remove(thiz->doc,
+	egueb_dom_node_event_listener_remove(thiz->topmost,
 			EGUEB_DOM_EVENT_IO_IMAGE,
 			_gst_egueb_document_feature_io_image_cb, EINA_TRUE, thiz);
 }
@@ -442,6 +443,7 @@ Gst_Egueb_Document * gst_egueb_document_new(Egueb_Dom_Node *doc)
 
 	thiz = calloc(1, sizeof(Gst_Egueb_Document));
 	thiz->doc = doc;
+	thiz->topmost = egueb_dom_document_document_element_get(doc);
 	return thiz;
 }
 
@@ -454,6 +456,12 @@ void gst_egueb_document_free(Gst_Egueb_Document *thiz)
 		_gst_egueb_document_feature_io_cleanup(thiz);
 		egueb_dom_feature_unref(thiz->io);
 		thiz->io = NULL;
+	}
+
+	if (thiz->topmost)
+	{
+		egueb_dom_node_unref(thiz->topmost);
+		thiz->topmost = NULL;
 	}
 
 	if (thiz->doc)
@@ -471,13 +479,13 @@ void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz)
 
 	if (thiz->io) return;
 
-	feature = egueb_dom_node_feature_get(thiz->doc, EGUEB_DOM_FEATURE_IO_NAME, NULL);
+	feature = egueb_dom_node_feature_get(thiz->topmost, EGUEB_DOM_FEATURE_IO_NAME, NULL);
 	if (!feature) return;
 
-	egueb_dom_node_event_listener_add(thiz->doc, EGUEB_DOM_EVENT_IO_DATA,
+	egueb_dom_node_event_listener_add(thiz->topmost, EGUEB_DOM_EVENT_IO_DATA,
 			_gst_egueb_document_feature_io_data_cb,
 			EINA_TRUE, thiz);
-	egueb_dom_node_event_listener_add(thiz->doc, EGUEB_DOM_EVENT_IO_IMAGE,
+	egueb_dom_node_event_listener_add(thiz->topmost, EGUEB_DOM_EVENT_IO_IMAGE,
 			_gst_egueb_document_feature_io_image_cb,
 			EINA_TRUE, thiz);
 	thiz->io = feature;

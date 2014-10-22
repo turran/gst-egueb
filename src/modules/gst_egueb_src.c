@@ -50,8 +50,10 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
 {
   Enesim_Stream *s;
   Egueb_Dom_Node *doc = NULL;
+  Egueb_Dom_Node *topmost;
   Egueb_Dom_Feature *render, *window, *ui;
   Egueb_Dom_String *uri;
+  gboolean ret = FALSE;
   gchar *data;
 
   /* check if we have a valid xml */
@@ -70,30 +72,36 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
 
   if (!doc) {
     GST_ERROR_OBJECT (thiz, "Failed parsing the document");
-    return FALSE;
+    goto no_doc;
   }
 
-  render = egueb_dom_node_feature_get(doc, EGUEB_DOM_FEATURE_RENDER_NAME,
+  /* The features are on the topmost element */
+  /* TODO add events to know whenever the topmost element has changed */
+  topmost = egueb_dom_document_document_element_get(doc);
+  if (!topmost) {
+    GST_ERROR_OBJECT (thiz, "Topmost element not found");
+    goto no_topmost;
+  }
+
+  render = egueb_dom_node_feature_get(topmost, EGUEB_DOM_FEATURE_RENDER_NAME,
       NULL);
   if (!render)
   {
     GST_ERROR_OBJECT (thiz, "No 'render' feature found, nothing to do");
-    egueb_dom_node_unref(doc);
-    return FALSE;
+    goto no_render;
   }
 
-  window = egueb_dom_node_feature_get(doc, EGUEB_DOM_FEATURE_WINDOW_NAME,
+  window = egueb_dom_node_feature_get(topmost, EGUEB_DOM_FEATURE_WINDOW_NAME,
       NULL);
   if (!window)
   {
     GST_ERROR_OBJECT (thiz, "No 'window' feature found, nothing to do");
-    egueb_dom_feature_unref(render);
-    egueb_dom_node_unref(doc);
-    return FALSE;
+    goto no_window;
   }
 
-  thiz->doc = doc;
-  thiz->render = render;
+  thiz->doc = egueb_dom_node_ref(doc);
+  thiz->topmost = egueb_dom_node_ref(topmost);
+  thiz->render = egueb_dom_feature_ref(render);
   thiz->window = window;
   /* set the uri */
   if (thiz->location) {
@@ -109,14 +117,22 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
     egueb_dom_feature_unref(ui);
   }
 
-  thiz->animation = egueb_dom_node_feature_get(thiz->doc,
+  thiz->animation = egueb_dom_node_feature_get(thiz->topmost,
       EGUEB_SMIL_FEATURE_ANIMATION_NAME, NULL);
 
   /* setup our own gst egueb document */
   thiz->gdoc = gst_egueb_document_new (egueb_dom_node_ref(thiz->doc));
   gst_egueb_document_feature_io_setup (thiz->gdoc);
+  ret = TRUE;
 
-  return TRUE;
+no_window:
+  egueb_dom_feature_unref(render);
+no_render:
+  egueb_dom_node_unref(topmost);
+no_topmost:
+  egueb_dom_node_unref(doc);
+no_doc:
+  return ret;
 }
 
 
@@ -142,6 +158,11 @@ gst_egueb_src_cleanup (GstEguebSrc * thiz)
   if (thiz->window) {
     egueb_dom_feature_unref(thiz->window);
     thiz->window = NULL;
+  }
+
+  if (thiz->topmost) {
+    egueb_dom_node_unref(thiz->topmost);
+    thiz->doc = NULL;
   }
 
   if (thiz->doc) {
@@ -802,7 +823,6 @@ static void
 gst_egueb_src_init (GstEguebSrc * thiz,
     GstEguebSrcClass * g_class)
 {
-  gst_egueb_init ();
   egueb_dom_init ();
   egueb_smil_init ();
   /* make it work in time */

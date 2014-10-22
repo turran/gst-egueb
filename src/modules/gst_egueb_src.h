@@ -37,6 +37,7 @@ struct _GstEguebSrc
   gchar *location;
   /* private */
   Egueb_Dom_Node *doc;
+  Egueb_Dom_Node *topmost;
   Egueb_Dom_Feature *render;
   Egueb_Dom_Feature *window;
   Egueb_Dom_Feature *animation;
