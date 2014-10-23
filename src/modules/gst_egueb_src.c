@@ -110,7 +110,7 @@ gst_egueb_src_setup (GstEguebSrc * thiz)
   }
 
   /* optional features */
-  ui = egueb_dom_node_feature_get(thiz->doc,
+  ui = egueb_dom_node_feature_get(thiz->topmost,
       EGUEB_DOM_FEATURE_UI_NAME, NULL);
   if (ui) {
     egueb_dom_feature_ui_input_get(ui, &thiz->input);
