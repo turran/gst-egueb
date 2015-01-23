@@ -277,6 +277,8 @@ gst_egueb_demux_loop (gpointer user_data)
   gint fps;
   
   thiz = GST_EGUEB_DEMUX (user_data);
+  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+
   GST_DEBUG_OBJECT (thiz, "Creating buffer at %" GST_TIME_FORMAT,
       GST_TIME_ARGS (thiz->last_ts));
 
@@ -324,11 +326,8 @@ gst_egueb_demux_loop (gpointer user_data)
   /* We need to check downstream if the caps have changed so we can
    * allocate an optimus size of surface
    */
-  GST_ERROR ("get buffer downstream");
-  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
   ret = gst_pad_alloc_buffer_and_set_caps (pad, thiz->last_ts,
       buffer_size, GST_PAD_CAPS (pad), &buf);
-  GST_ERROR ("with caps %" GST_PTR_FORMAT, GST_PAD_CAPS (pad));
   if (ret == GST_FLOW_OK) {
     new_buffer_size = GST_BUFFER_SIZE (buf);
     buffer_size = gst_egueb_demux_get_size (thiz);
@@ -372,11 +371,22 @@ gst_egueb_demux_loop (gpointer user_data)
   thiz->last_ts += GST_BUFFER_DURATION (buf);
 
   ret = gst_pad_push (pad, buf);
+  if (ret != GST_FLOW_OK) {
+    GST_ERROR ("wrong %d", ret);
+  }
+
+  goto done;
+
   /* TODO check return value */
-  gst_object_unref (pad);
   return;
 
 eos:
+  GST_DEBUG_OBJECT (thiz, "Sending EOS");
+  gst_pad_push_event (pad, gst_event_new_eos ());
+  gst_pad_pause_task (pad);
+
+done:
+  gst_object_unref (pad);
   return;
 }
 
@@ -738,6 +748,8 @@ gst_egueb_demux_fixate_caps (GstPad * pad, GstCaps * caps)
   gint i;
 
   thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+
+  GST_DEBUG_OBJECT (thiz, "Fixating caps");
   for (i = 0; i < gst_caps_get_size (caps); ++i) {
     structure = gst_caps_get_structure (caps, i);
 
@@ -762,9 +774,9 @@ gst_egueb_demux_get_caps (GstPad * pad)
   Egueb_Dom_Feature_Window_Type type;
   int cw, ch;
 
-  GST_ERROR ("Getting caps");
-
   thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+
+  GST_DEBUG_OBJECT (thiz, "Getting caps");
   if (!thiz->doc) {
     GST_DEBUG_OBJECT (thiz, "Can not get caps without a parsed document");
     gst_object_unref (thiz);
@@ -779,6 +791,7 @@ gst_egueb_demux_get_caps (GstPad * pad)
       "blue_mask", G_TYPE_INT, 0xff000000,
 #endif
 
+  /* TODO get the template caps */
   /* create our own structure */
   s = gst_structure_new ("video/x-raw-rgb",
       "bpp", G_TYPE_INT, 32,
@@ -800,26 +813,29 @@ gst_egueb_demux_get_caps (GstPad * pad)
     gst_object_unref (thiz);
     return gst_caps_copy (gst_pad_get_pad_template_caps (pad));
   } else {
-    egueb_dom_feature_window_content_size_set(thiz->window, thiz->container_w,
-        thiz->container_h);
+    egueb_dom_feature_window_content_size_set(thiz->window, 0, 0);
     egueb_dom_feature_window_content_size_get(thiz->window, &cw, &ch);
   }
 
+  /* fixate the one fixed */
   if (cw <= 0 || ch <= 0) {
-    GST_WARNING_OBJECT (thiz, "Invalid size of the window %d %d", cw, ch);
+    gint i;
+
+    GST_DEBUG_OBJECT (thiz, "Relative size %d %d", cw, ch);
     gst_object_unref (thiz);
-    return gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+    caps = gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+    for (i = 0; i < gst_caps_get_size (caps); ++i) {
+      s = gst_caps_get_structure (caps, i);
+      if (cw > 0)
+        gst_structure_fixate_field_nearest_int (s, "width", cw);
+      if (ch > 0)
+        gst_structure_fixate_field_nearest_int (s, "height", ch);
+    }
+    return caps;
   }
 
   gst_structure_set (s, "width", G_TYPE_INT, cw, NULL);
   gst_structure_set (s, "height", G_TYPE_INT, ch, NULL);
-
-#if 0
-  GST_DEBUG_OBJECT (thiz, "Using a range for the height");
-  gst_structure_set (s, "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
-  GST_DEBUG_OBJECT (thiz, "Using a range for the width");
-  gst_structure_set (s, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
-#endif
 
   caps = gst_caps_new_full (s, NULL);
   gst_object_unref (thiz);
@@ -836,9 +852,9 @@ gst_egueb_demux_set_caps (GstPad * pad, GstCaps * caps)
   gint width;
   gint height;
 
-  GST_ERROR ("Setting caps");
-
   thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+  GST_DEBUG_OBJECT (thiz, "Setting caps");
+
   width = thiz->w;
   height = thiz->h;
 
