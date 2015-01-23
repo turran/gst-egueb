@@ -2,6 +2,14 @@
 #define GST_EGUEB_DEMUX_H
 
 #include <gst/gst.h>
+#include <gst/base/gstadapter.h>
+#include <gst/base/gstbasesrc.h>
+#include <gst/interfaces/navigation.h>
+
+#include <Egueb_Dom.h>
+#include <Egueb_Smil.h>
+
+#include "gst_egueb_document.h"
 
 G_BEGIN_DECLS
 
@@ -21,17 +29,49 @@ typedef struct _GstEguebDemuxClass GstEguebDemuxClass;
 
 struct _GstEguebDemux
 {
-  GstBin parent;
-  GstElement *sink;
-  GstElement *src;
-  GstBuffer *xml;
+  GstElement parent;
+  /* properties */
+  guint container_w;
+  guint container_h;
+  gchar *location;
+
+  /* private */
+  GstAdapter *adapter;
+
+  Egueb_Dom_Node *doc;
+  Egueb_Dom_Node *topmost;
+  Egueb_Dom_Feature *render;
+  Egueb_Dom_Feature *window;
+  Egueb_Dom_Feature *animation;
+  Egueb_Dom_Feature *io;
+
+  Egueb_Dom_Input *input;
+
+  Gst_Egueb_Document *gdoc;
+
+  GMutex *doc_lock;
+  Enesim_Surface *s;
+  Enesim_Renderer *background;
+  Eina_List *damages;
+  gboolean done;
+
+  guint w;
+  guint h;
+  gint spf_n;
+  gint spf_d;
+
+  gint64 last_stop;
+  guint64 seek;
+  guint64 last_ts;
+  gint64 duration;
+  gint64 fps;
 };
 
 struct _GstEguebDemuxClass
 {
-  GstBinClass parent_class;
-  void (*handle_message) (GstBin * bin, GstMessage * message);
+  GstElementClass parent_class;
 };
+
 
 GType gst_egueb_demux_get_type (void);
 
