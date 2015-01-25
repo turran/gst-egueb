@@ -1,4 +1,3 @@
-
 /* The idea of this element is that it should produce image buffers
  * with the rendered svg per frame
  * as properties we might have:
@@ -7,6 +6,10 @@
  * It should use the enesim buffer instead of normal gstbuffers to create
  * the buffers
  */
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #include "gst_egueb_demux.h"
 #include "gst_egueb_type.h"
@@ -722,6 +725,7 @@ gst_egueb_demux_src_query (GstPad * pad, GstQuery * query)
   return ret;
 }
 
+#if 0
 static gboolean
 gst_egueb_demux_do_seek (GstBaseSrc *src, GstSegment *segment)
 {
@@ -736,6 +740,7 @@ gst_egueb_demux_do_seek (GstBaseSrc *src, GstSegment *segment)
 
   return TRUE;
 }
+#endif
 
 static void
 gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)

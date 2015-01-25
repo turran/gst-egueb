@@ -55,28 +55,42 @@ gst_egueb_bin_requirements_cflags=""
 gst_egueb_bin_requirements_bins=""
 gst_egueb_bin_requirements_pc="gstreamer-0.10"
 
-gst_egueb_lib_requirements_cflags=""
-gst_egueb_lib_requirements_libs=""
-gst_egueb_lib_requirements_pc="gstreamer-0.10 egueb-dom enesim"
-gst_egueb_lib_requirements_pc_private=""
-
 gst_egueb_modules_requirements_cflags=""
 gst_egueb_modules_requirements_libs=""
-gst_egueb_modules_requirements_pc="gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-dom egueb-smil enesim"
+gst_egueb_modules_requirements_pc="egueb-dom egueb-smil enesim"
+
+gstreamer_api_default="0.10"
+AC_ARG_WITH(gstreamer-api,
+   AS_HELP_STRING([--with-gstreamer-api],
+       [manually set the gstreamer API version 0.10 or 1.0 are valid values]),
+       [gstreamer_api="${withval}"])
+
+if test "x$gstreamer_api" = "x" ; then
+  gstreamer_api="${gstreamer_api_default}"
+fi
+
+case "$gstreamer_api" in
+  1.0)
+  gst_egueb_modules_requirements_pc+=" gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0"
+  AC_DEFINE_UNQUOTED(HAVE_GST_1, [1], [Use GStreamer 1.0])
+  ;;
+  0.10)
+  gst_egueb_modules_requirements_pc+=" gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10"
+  AC_DEFINE_UNQUOTED(HAVE_GST_0, [1], [Use GStreamer 0.10])
+  ;;
+  *)
+  AC_MSG_ERROR([Unsupported gstreamer version "$gstreamer_api"])
+  ;;
+esac
 
 dnl make GST_MAJORMINOR available in Makefile.am
-GST_MAJORMINOR=0.10
+GST_MAJORMINOR=$gstreamer_api
 AC_SUBST(GST_MAJORMINOR)
 
-AC_SUBST([gst_egueb_lib_requirements_pc])
-AC_SUBST([gst_egueb_lib_requirements_pc_private])
-
 PKG_CHECK_MODULES([GST_EGUEB_BIN], [${gst_egueb_bin_requirements_pc}])
-PKG_CHECK_MODULES([GST_EGUEB_LIB], [${gst_egueb_lib_requirements_pc}])
 PKG_CHECK_MODULES([GST_EGUEB_MODULES], [${gst_egueb_modules_requirements_pc}])
 
 GST_EGUEB_BIN_CFLAGS="${GST_EGUEB_BIN_CFLAGS} ${gst_egueb_bin_requirements_cflags}"
-GST_EGUEB_LIB_CFLAGS="${GST_EGUEB_LIB_CFLAGS} ${gst_egueb_lib_requirements_cflags}"
 GST_EGUEB_MODULES_CFLAGS="${GST_EGUEB_MODULES_CFLAGS} ${gst_egueb_modules_requirements_cflags}"
 
 ## TODO Dependencies for the modules
@@ -102,6 +116,7 @@ echo "Compilation.................................: make (or gmake)"
 echo "  CPPFLAGS..................................: $CPPFLAGS"
 echo "  CFLAGS....................................: $CFLAGS"
 echo "  LDFLAGS...................................: $LDFLAGS"
+echo "  GStreamer API.............................: $gstreamer_api"
 echo
 echo "Installation................................: make install (as root if needed, with 'su' or 'sudo')"
 echo "  prefix....................................: $prefix"
