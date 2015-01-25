@@ -15,6 +15,10 @@ GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
 #define GST_CAT_DEFAULT gst_egueb_demux_debug
 #define parent_class gst_egueb_demux_parent_class
 
+#define DEFAULT_CONTAINER_WIDTH 256
+#define DEFAULT_CONTAINER_HEIGHT 256
+
+
 G_DEFINE_TYPE (GstEguebDemux, gst_egueb_demux, GST_TYPE_ELEMENT);
 
 /* Later, whenever egueb supports more than svg, we can
@@ -1015,8 +1019,8 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
   thiz->last_ts = 0;
   thiz->last_stop = -1;
   /* set default properties */
-  thiz->container_w = 256;
-  thiz->container_h = 256;
+  thiz->container_w = DEFAULT_CONTAINER_WIDTH;
+  thiz->container_h = DEFAULT_CONTAINER_HEIGHT;
   thiz->background = enesim_renderer_background_new();
   enesim_renderer_background_color_set (thiz->background, 0xffffffff);
 }
