@@ -33,8 +33,15 @@ GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-raw-rgb, "
         "framerate = (fraction) [ 0, MAX ], "
-        "depth = 24, bpp = 32, "
-        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ]")
+        "depth = 24, "
+        "bpp = 32, "
+        "endianness = (int)4321, "
+        "red_mask = 0x0000ff00, "
+        "green_mask = 0x00ff0000, "
+        "blue_mask = 0xff000000, "
+        "framerate = (fraction) [ 1, MAX], "
+        "width = (int) [ 1, MAX ], "
+        "height = (int) [ 1, MAX ]")
     );
 
 static GstElementDetails gst_egueb_demux_details = {
@@ -482,7 +489,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
 
   /* set the caps, and start running */
   pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
-  caps = gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+  caps = gst_caps_copy (gst_pad_get_caps (pad));
   gst_pad_fixate_caps (pad, caps);
   gst_pad_set_caps (pad, caps);
   /* start pushing buffers */
@@ -499,7 +506,6 @@ beach:
 
   return ret;
 }
-
 
 static void
 gst_egueb_demux_cleanup (GstEguebDemux * thiz)
@@ -632,12 +638,14 @@ gst_egueb_demux_sink_chain (GstPad * pad, GstBuffer * buffer)
 }
 
 static gboolean
-gst_egueb_demux_event (GstBaseSrc * src, GstEvent * event)
+gst_egueb_demux_src_event (GstPad * pad, GstEvent * event)
 {
-  GstEguebDemux *thiz = GST_EGUEB_DEMUX (src);
+  GstEguebDemux *thiz;
   gboolean ret = FALSE;
 
-  GST_DEBUG_OBJECT (thiz, "event %s", GST_EVENT_TYPE_NAME (event));
+  thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+  GST_DEBUG_OBJECT (thiz, "Received event '%s'", GST_EVENT_TYPE_NAME (event));
+
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_QOS:{
     GstQOSType type;
@@ -679,20 +687,20 @@ gst_egueb_demux_event (GstBaseSrc * src, GstEvent * event)
     break;
   }
 
-  /* pass to the base class */
-  if (!ret)
-    ret = GST_BASE_SRC_CLASS (parent_class)->event (src, event);
+  gst_object_unref (thiz);
 
   return ret;
 }
 
 static gboolean
-gst_egueb_demux_query (GstBaseSrc * src, GstQuery * query)
+gst_egueb_demux_src_query (GstPad * pad, GstQuery * query)
 {
-  GstEguebDemux *thiz = GST_EGUEB_DEMUX (src);
+  GstEguebDemux *thiz;
   gboolean ret = FALSE;
 
-  GST_DEBUG ("query %s", GST_QUERY_TYPE_NAME (query));
+  thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+  GST_DEBUG_OBJECT (thiz, "Received query '%s'", GST_QUERY_TYPE_NAME (query));
+
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_DURATION:
     if (thiz->last_stop >= 0) {
@@ -705,18 +713,9 @@ gst_egueb_demux_query (GstBaseSrc * src, GstQuery * query)
     break;
   }
 
-  if (!ret)
-    ret = GST_BASE_SRC_CLASS (parent_class)->query (src, query);
+  gst_object_unref (thiz);
 
   return ret;
-}
-
-static gboolean
-gst_egueb_demux_prepare_seek_segment (GstBaseSrc *src, GstEvent *seek,
-    GstSegment *segment)
-{
-  GST_ERROR ("prepare seek");
-  return TRUE;
 }
 
 static gboolean
@@ -734,14 +733,8 @@ gst_egueb_demux_do_seek (GstBaseSrc *src, GstSegment *segment)
   return TRUE;
 }
 
-static gboolean
-gst_egueb_demux_is_seekable (GstBaseSrc *src)
-{
-  return TRUE;
-}
-
 static void
-gst_egueb_demux_fixate_caps (GstPad * pad, GstCaps * caps)
+gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)
 {
   GstEguebDemux *thiz;
   GstStructure *structure;
@@ -766,85 +759,57 @@ gst_egueb_demux_fixate_caps (GstPad * pad, GstCaps * caps)
 }
 
 static GstCaps *
-gst_egueb_demux_get_caps (GstPad * pad)
+gst_egueb_demux_src_get_caps (GstPad * pad)
 {
   GstEguebDemux *thiz;
   GstCaps *caps;
-  GstStructure *s;
   Egueb_Dom_Feature_Window_Type type;
+  gint i;
   int cw, ch;
 
   thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
 
   GST_DEBUG_OBJECT (thiz, "Getting caps");
+
+  caps = gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+
   if (!thiz->doc) {
-    GST_DEBUG_OBJECT (thiz, "Can not get caps without a parsed document");
-    gst_object_unref (thiz);
-    return gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+    GST_DEBUG_OBJECT (thiz, "Using template caps");
+    goto beach;
   }
-
-#if 0
-  /* For ARGB888 */
-      "alpha_mask", G_TYPE_INT, 0x000000ff,
-      "red_mask", G_TYPE_INT, 0x0000ff00,
-      "green_mask", G_TYPE_INT, 0x00ff0000,
-      "blue_mask", G_TYPE_INT, 0xff000000,
-#endif
-
-  /* TODO get the template caps */
-  /* create our own structure */
-  s = gst_structure_new ("video/x-raw-rgb",
-      "bpp", G_TYPE_INT, 32,
-      "depth", G_TYPE_INT, 24,
-      "endianness", G_TYPE_INT, G_BIG_ENDIAN,
-      "red_mask", G_TYPE_INT, 0x0000ff00,
-      "green_mask", G_TYPE_INT, 0x00ff0000,
-      "blue_mask", G_TYPE_INT, 0xff000000,
-      "framerate", GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1,
-      NULL);
 
   if (!egueb_dom_feature_window_type_get (thiz->window, &type)) {
     GST_WARNING_OBJECT (thiz, "Impossible to get the type of the window");
-    return gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+    goto beach;
   }
 
   if (type == EGUEB_DOM_FEATURE_WINDOW_TYPE_SLAVE) {
     GST_ERROR_OBJECT (thiz, "Not supported yet");
-    gst_object_unref (thiz);
-    return gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+    goto beach;
   } else {
     egueb_dom_feature_window_content_size_set(thiz->window, 0, 0);
     egueb_dom_feature_window_content_size_get(thiz->window, &cw, &ch);
   }
 
-  /* fixate the one fixed */
-  if (cw <= 0 || ch <= 0) {
-    gint i;
+  for (i = 0; i < gst_caps_get_size (caps); i++) {
+    GstStructure *s;
 
-    GST_DEBUG_OBJECT (thiz, "Relative size %d %d", cw, ch);
-    gst_object_unref (thiz);
-    caps = gst_caps_copy (gst_pad_get_pad_template_caps (pad));
-    for (i = 0; i < gst_caps_get_size (caps); ++i) {
-      s = gst_caps_get_structure (caps, i);
-      if (cw > 0)
-        gst_structure_fixate_field_nearest_int (s, "width", cw);
-      if (ch > 0)
-        gst_structure_fixate_field_nearest_int (s, "height", ch);
-    }
-    return caps;
+    s = gst_caps_get_structure (caps, i);
+    if (cw > 0)
+      gst_structure_fixate_field_nearest_int (s, "width", cw);
+    if (ch > 0)
+      gst_structure_fixate_field_nearest_int (s, "height", ch);
   }
 
-  gst_structure_set (s, "width", G_TYPE_INT, cw, NULL);
-  gst_structure_set (s, "height", G_TYPE_INT, ch, NULL);
-
-  caps = gst_caps_new_full (s, NULL);
+beach:
+  GST_DEBUG_OBJECT (thiz, "Returning caps %" GST_PTR_FORMAT, caps);
   gst_object_unref (thiz);
 
   return caps;
 }
 
 static gboolean
-gst_egueb_demux_set_caps (GstPad * pad, GstCaps * caps)
+gst_egueb_demux_src_set_caps (GstPad * pad, GstCaps * caps)
 {
   GstEguebDemux * thiz;
   GstStructure *s;
@@ -887,6 +852,7 @@ gst_egueb_demux_set_caps (GstPad * pad, GstCaps * caps)
       thiz->s = NULL;
     }
 
+    GST_INFO_OBJECT (thiz, "Creating surface of size %dx%d", width, height);
     thiz->s = enesim_surface_new (ENESIM_FORMAT_ARGB8888, width, height);
     thiz->w = width;
     thiz->h = height;
@@ -1030,15 +996,15 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
   pad = gst_pad_new_from_static_template (&gst_egueb_demux_src_factory,
       "src");
   gst_pad_set_setcaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_set_caps));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_set_caps));
   gst_pad_set_getcaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_get_caps));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_get_caps));
   gst_pad_set_fixatecaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_fixate_caps));
-#if 0
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_fixate_caps));
   gst_pad_set_event_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_event));
-#endif
+  gst_pad_set_query_function (pad,
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_query));
   gst_element_add_pad (GST_ELEMENT (thiz), pad);
 
   /* our internal members */
@@ -1102,11 +1068,6 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
 
   /* set virtual pointers */
 #if 0
-  base_class->create = gst_egueb_demux_create;
-  base_class->event = gst_egueb_demux_event;
-  base_class->query = gst_egueb_demux_query;
-  base_class->is_seekable = gst_egueb_demux_is_seekable;
-  base_class->prepare_seek_segment = gst_egueb_demux_prepare_seek_segment;
   base_class->do_seek = gst_egueb_demux_do_seek;
 #endif
 }
