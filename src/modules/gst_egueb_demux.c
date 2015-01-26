@@ -1065,9 +1065,4 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_egueb_demux_src_factory));
   gst_element_class_set_details (element_class, &gst_egueb_demux_details);
-
-  /* set virtual pointers */
-#if 0
-  base_class->do_seek = gst_egueb_demux_do_seek;
-#endif
 }
