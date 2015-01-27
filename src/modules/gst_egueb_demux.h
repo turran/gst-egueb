@@ -18,6 +18,19 @@
 
 #include "gst_egueb_document.h"
 
+
+#if HAVE_GST_1
+#define GST_FLOW_WRONG_STATE GST_FLOW_FLUSHING
+#define GST_FLOW_UNEXPECTED GST_FLOW_EOS
+#define GST_SEGMENT_SET_POSITION(segment,value) ((segment)->position=(value))
+#define GST_SEGMENT_GET_POSITION(segment)       ((segment)->position)
+
+#else
+#define gst_segment_do_seek gst_segment_set_seek
+#define GST_SEGMENT_SET_POSITION(segment,value) ((segment)->last_stop=value)
+#define GST_SEGMENT_GET_POSITION(segment)       ((segment)->last_stop)
+#endif
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_EGUEB_DEMUX            (gst_egueb_demux_get_type())
@@ -43,33 +56,45 @@ struct _GstEguebDemux
   gchar *location;
 
   /* private */
+  GMutex *doc_lock;
   GstAdapter *adapter;
-
-  Egueb_Dom_Node *doc;
-  Egueb_Dom_Node *topmost;
-  Egueb_Dom_Feature *render;
-  Egueb_Dom_Feature *window;
-  Egueb_Dom_Feature *animation;
-  Egueb_Dom_Feature *io;
-
-  Egueb_Dom_Input *input;
-
+  GstSegment *segment;
+  gboolean send_ns;
+  GstSegment *pending_segment;
   Gst_Egueb_Document *gdoc;
 
-  GMutex *doc_lock;
+  /* The egueb related stuff */
+  Egueb_Dom_Node *doc;
+  Egueb_Dom_Node *topmost;
+
+  /* Render feature */
+  Egueb_Dom_Feature *window;
+  Egueb_Dom_Feature *render;
   Enesim_Surface *s;
   Enesim_Renderer *background;
   Eina_List *damages;
-  gboolean done;
-
   guint w;
   guint h;
+
+  /* Animation feature */
+  Egueb_Dom_Feature *animation;
   gint spf_n;
   gint spf_d;
 
+  /* IO feature */
+  Egueb_Dom_Feature *io;
+
+  /* UI feature */
+  Egueb_Dom_Input *input;
+
+  gboolean done;
+
+  /* TODO remove this */
   gint64 last_stop;
+  /* TODO remove this */
   guint64 seek;
-  guint64 last_ts;
+  guint64 next_ts;
+  /* TODO rename this */
   gint64 duration;
   gint64 fps;
 };

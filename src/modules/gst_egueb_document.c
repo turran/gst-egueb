@@ -16,8 +16,9 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <gst/gst.h>
-#include <Egueb_Dom.h>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #include "gst_egueb_document.h"
 
@@ -88,9 +89,26 @@ _gst_egueb_document_data_fakesink_handoff_cb (GstElement * object,
 		 GstBuffer * buf, GstPad * pad, gpointer data)
 {
 	Gst_Egueb_Document_Pipeline *p = data;
+#if HAVE_GST_1
+	GstMapInfo mi;
+#endif
+	guint8 *bdata;
+	gint bsize;
 
-	eina_binbuf_append_length(p->binbuf, GST_BUFFER_DATA(buf),
-			GST_BUFFER_SIZE(buf)); 
+
+#if HAVE_GST_1
+	gst_buffer_map(buf, &mi, GST_MAP_READ);
+	bdata = mi.data;
+	bsize = mi.size;
+#else
+	bdata = GST_BUFFER_DATA(buf);
+	bsize = GST_BUFFER_SIZE(buf);
+#endif
+
+	eina_binbuf_append_length(p->binbuf, bdata, bsize);
+#if HAVE_GST_1
+	gst_buffer_unmap(buf, &mi);
+#endif
 }
 
 static void _gst_egueb_document_data_uridecodebin_pad_added_cb (
@@ -128,13 +146,21 @@ _gst_egueb_document_image_fakesink_handoff_cb (GstElement * object,
 {
 	Gst_Egueb_Document_Pipeline *p = data;
 	GstCaps *caps;
+#if HAVE_GST_1
+	GstMapInfo mi;
+#endif
 	const GstStructure *s;
 	Enesim_Buffer *ebuf;
 	Enesim_Buffer_Sw_Data edata;
 	Enesim_Renderer *r;
 	gint width, height;
+	guint8 *sdata;
 
-	caps = gst_buffer_get_caps(buf);
+#if HAVE_GST_1
+	caps = gst_pad_get_current_caps(pad);
+#else
+	caps = gst_pad_get_caps_reffed(pad);
+#endif
 	s = gst_caps_get_structure(caps, 0);
 	/* get the width and height */
 	gst_structure_get_int(s, "width", &width);
@@ -144,7 +170,14 @@ _gst_egueb_document_image_fakesink_handoff_cb (GstElement * object,
 	/* create the surface based on the buffer data */
 	/* the data is not premultiplied, we need to do it */
 	/* TODO we could add the xrgb caps so for jpegs there's no need to premultiply */
-	edata.argb8888.plane0 = (uint32_t *)GST_BUFFER_DATA(buf);
+#if HAVE_GST_1
+	gst_buffer_map(buf, &mi, GST_MAP_READ);
+	sdata = mi.data;
+#else
+	sdata = GST_BUFFER_DATA(buf);
+#endif
+
+	edata.argb8888.plane0 = (uint32_t *)sdata;
 	edata.argb8888.plane0_stride = GST_ROUND_UP_4(width * 4);
 
 	ebuf = enesim_buffer_new_data_from(ENESIM_BUFFER_FORMAT_ARGB8888,
@@ -155,6 +188,9 @@ _gst_egueb_document_image_fakesink_handoff_cb (GstElement * object,
 	r = enesim_renderer_importer_new();
 	enesim_renderer_importer_buffer_set(r, ebuf);
 	enesim_renderer_draw(r, p->surface, ENESIM_ROP_FILL, NULL, 0, 0, NULL);
+#if HAVE_GST_1
+	gst_buffer_unmap(buf, &mi);
+#endif
 	enesim_renderer_unref(r);
 }
 
@@ -259,17 +295,39 @@ static void _gst_egueb_document_image_appsrc_need_data_cb (
 	if (p->stream_mmap)
 	{
 		/* push the stream */
+#if HAVE_GST_1
+		buf = gst_buffer_new_wrapped_full((GstMemoryFlags)0, p->stream_mmap,
+				stream_length, 0, stream_length, NULL, NULL);
+#else
 		buf = gst_buffer_new();
 		GST_BUFFER_DATA(buf) = (gchar *)p->stream_mmap;
 		GST_BUFFER_SIZE(buf) = stream_length;
+#endif
 		p->buffer_pushed = TRUE;
 	}
 	else
 	{
+#if HAVE_GST_1
+		GstMapInfo mi;
+#endif
+		guint8 *bdata;
 		ssize_t written;
 
+#if HAVE_GST_1
+		buf = gst_buffer_new_allocate(NULL, BUFFER_SIZE, NULL);
+		gst_buffer_map(buf, &mi, GST_MAP_WRITE);
+		bdata = mi.data;
+#else
 		buf = gst_buffer_new_and_alloc(BUFFER_SIZE);
-		written = enesim_stream_read(p->s, GST_BUFFER_DATA(buf), BUFFER_SIZE);
+		bdata = GST_BUFFER_DATA(buf);
+#endif
+		written = enesim_stream_read(p->s, bdata, BUFFER_SIZE);
+#if HAVE_GST_1
+		gst_buffer_unmap(buf, &mi);
+		mi.size = written;
+#else
+		GST_BUFFER_SIZE(buf) = written;
+#endif
 		if (written <= 0)
 		{
 			gst_buffer_unref(buf);
@@ -277,7 +335,6 @@ static void _gst_egueb_document_image_appsrc_need_data_cb (
 			g_signal_emit_by_name (src, "end-of-stream", &ret);
 			return;
 		}
-		GST_BUFFER_SIZE(buf) = written;
 	}
 
 	/* push the buffer and the end of stream at once */

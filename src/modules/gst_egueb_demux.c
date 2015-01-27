@@ -51,13 +51,6 @@ GST_STATIC_PAD_TEMPLATE ("src",
         "height = (int) [ 1, MAX ]")
     );
 
-static GstElementDetails gst_egueb_demux_details = {
-  "Egueb SVG Parser/Demuxer/Decoder",
-  "Codec/Demuxer",
-  "Generates buffers with the SVG content rendered",
-  "<enesim-devel@googlegroups.com>",
-};
-
 enum
 {
   PROP_0,
@@ -237,43 +230,66 @@ gst_egueb_demux_get_size (GstEguebDemux * thiz)
 static void
 gst_egueb_demux_convert (GstEguebDemux * thiz, GstBuffer **buffer)
 {
-  Enesim_Buffer *eb;
-  Eina_Rectangle clip;
-
   if (!*buffer) {
+    Enesim_Buffer *eb;
     Enesim_Buffer_Sw_Data sdata;
     GstBuffer *b;
+    guint8 *data;
+    gint size;
 
     sdata.xrgb8888.plane0_stride = GST_ROUND_UP_4 (thiz->w * 4);
-    sdata.xrgb8888.plane0 = (uint32_t *) g_new(guint8,
+    sdata.xrgb8888.plane0 = (uint32_t *) g_new (guint8,
         sdata.xrgb8888.plane0_stride * thiz->h);
 
     eb = enesim_buffer_new_data_from (ENESIM_BUFFER_FORMAT_XRGB8888, thiz->w,
         thiz->h, EINA_FALSE, &sdata, gst_egueb_demux_buffer_free, NULL);
     enesim_buffer_ref (eb);
 
+    data = (guint8 *)sdata.rgb888.plane0;
+    size = sdata.rgb888.plane0_stride * thiz->h;
+
+#if HAVE_GST_1
+    b = gst_buffer_new_wrapped_full ((GstMemoryFlags)0, data, size, 0, size,
+        eb, (GFreeFunc) enesim_buffer_unref);
+#else
     b = gst_buffer_new ();
-    GST_BUFFER_DATA (b) = (guint8 *)sdata.rgb888.plane0;
-    GST_BUFFER_SIZE (b) = sdata.rgb888.plane0_stride * thiz->h;
+    GST_BUFFER_DATA (b) = data;
+    GST_BUFFER_SIZE (b) = size;
 
     /* unref the buffer when done */
     GST_BUFFER_MALLOCDATA (b) = (guint8 *) eb;
     GST_BUFFER_FREE_FUNC (b) = (GFreeFunc ) enesim_buffer_unref;
+#endif
+    enesim_converter_surface (thiz->s, eb);
     *buffer = b;
   } else {
+    Enesim_Buffer *eb;
     Enesim_Buffer_Sw_Data sdata;
+    guint8 *data;
+#if HAVE_GST_1
+    GstMapInfo mi;
+#endif
+
+#if HAVE_GST_1
+    gst_buffer_map (*buffer, &mi, GST_MAP_READWRITE);
+    data = mi.data;
+#else
+    data = GST_BUFFER_DATA (*buffer);
+#endif
 
     sdata.xrgb8888.plane0_stride = GST_ROUND_UP_4 (thiz->w * 4);
-    sdata.xrgb8888.plane0 = (uint32_t *) GST_BUFFER_DATA (*buffer);
+    sdata.xrgb8888.plane0 = (uint32_t *) data;
     eb = enesim_buffer_new_data_from (ENESIM_BUFFER_FORMAT_XRGB8888, thiz->w,
         thiz->h, EINA_FALSE, &sdata, NULL, NULL);
+    /* convert it to a buffer and send it */
+    enesim_converter_surface (thiz->s, eb);
+    enesim_buffer_unref (eb);
+#if HAVE_GST_1
+    gst_buffer_unmap (*buffer, &mi);
+#endif
   }
 
-  /* convert it to a buffer and send it */
-  enesim_converter_surface (thiz->s, eb);
-  enesim_buffer_unref (eb);
 }
-
 
 static void
 gst_egueb_demux_loop (gpointer user_data)
@@ -286,67 +302,124 @@ gst_egueb_demux_loop (gpointer user_data)
   GstClockTime next;
   Enesim_Buffer *eb;
   Enesim_Buffer_Sw_Data sw_data;
+  gboolean send_eos = FALSE;
   gulong buffer_size;
   gulong new_buffer_size;
   gint fps;
-  
+
   thiz = GST_EGUEB_DEMUX (user_data);
   pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
 
   GST_DEBUG_OBJECT (thiz, "Creating buffer at %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (thiz->last_ts));
+      GST_TIME_ARGS (thiz->next_ts));
 
-  /* check if we need to update the new segment */
+  /* check if we need to update the duration */
   if (thiz->animation) {
     Egueb_Smil_Clock clock;
+    gint64 new_duration = GST_CLOCK_TIME_NONE;
 
-    if (!egueb_smil_feature_animation_has_animations(thiz->animation)) {
-      if (thiz->last_ts > 0) {
-        GST_DEBUG ("No animations found, nothing else to push");
-        goto eos;
-      }
-    } else if (egueb_smil_feature_animation_duration_get(thiz->animation, &clock)) {
-      if (thiz->last_stop < clock) {
-        //gst_base_src_new_seamless_segment (src, 0, clock, thiz->last_ts); 
-      } else if (thiz->last_stop > clock) {
-        GST_DEBUG ("EOS");
-        goto eos;
-      }
-      thiz->last_stop = clock;
+    if (!egueb_smil_feature_animation_has_animations (thiz->animation))
+      send_eos = TRUE;
+
+    if (egueb_smil_feature_animation_duration_get (thiz->animation, &clock))
+      new_duration = clock;
+
+    /* Create the new segment */
+    if (new_duration != thiz->segment->duration) {
+      /* TODO inform the application that a new duration is available */
+      gst_segment_set_duration (thiz->segment, GST_FORMAT_TIME, new_duration);
     }
+  } else {
+    send_eos = TRUE;
   }
 
-  /* check if we need to send the EOS */
-  if (thiz->last_ts >= thiz->last_stop) {
-    GST_DEBUG ("EOS reached, current: %" GST_TIME_FORMAT " stop: %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (thiz->last_ts), GST_TIME_ARGS (thiz->last_stop));
-    goto eos;
-  }
+  /* apply the pending segment */
+  if (thiz->pending_segment) {
+    gint64 new_start, new_stop;
 
-#if 0
-  /* check if we need to seek */
-  if (GST_CLOCK_TIME_IS_VALID (thiz->seek)) {
-    gdouble seconds;
+    if (gst_segment_clip (thiz->segment, GST_FORMAT_TIME,
+        thiz->pending_segment->start, thiz->pending_segment->stop,
+        &new_start, &new_stop)) {
 
-    seconds = thiz->seek / 1000000000.0;
-    egueb_svg_element_svg_time_set (thiz->svg, seconds);
-    thiz->last_ts = thiz->seek;
-    thiz->seek = GST_CLOCK_TIME_NONE;
-  }
+      /* close previous segment and send a new one of we need to */
+      if (thiz->segment->start != new_start || thiz->segment->stop !=
+          new_stop) {
+        GstEvent *event;
+
+        /* close the segment */
+        GST_DEBUG_OBJECT (thiz, "Closing running segment %" GST_SEGMENT_FORMAT,
+            thiz->segment);
+
+#if HAVE_GST_0
+        gst_pad_push_event (pad, gst_event_new_new_segment (TRUE,
+            thiz->segment->rate, thiz->segment->format,
+            thiz->segment->start, thiz->segment->stop,
+            GST_SEGMENT_GET_POSITION (thiz->segment)));
 #endif
 
+        thiz->segment->start = new_start;
+        thiz->segment->stop = new_stop;
+        thiz->send_ns = TRUE;
+#if 0
+        /* do the seek on the animation feature */
+        egueb_smil_feature_animation_time_set (thiz->animation,
+            thiz->segment->start);
+#endif
+        thiz->next_ts = new_start;
+        GST_SEGMENT_SET_POSITION (thiz->segment, new_start);
+      }
+    }
+
+    gst_segment_free (thiz->pending_segment);
+    thiz->pending_segment = NULL;
+  }
+
+  if (thiz->send_ns) {
+    GstEvent *event;
+
+    GST_DEBUG_OBJECT (thiz, "Sending new segment %" GST_SEGMENT_FORMAT,
+        thiz->segment);
+#if HAVE_GST_1
+    event = gst_event_new_segment (thiz->segment);
+#else
+    event = gst_event_new_new_segment (FALSE,
+        thiz->segment->rate, thiz->segment->format,
+        thiz->segment->start, thiz->segment->stop,
+        GST_SEGMENT_GET_POSITION (thiz->segment));
+#endif
+    gst_pad_push_event (pad, event);
+    thiz->send_ns = FALSE;
+  }
+
+  /* check if the current ts is out of segment */
+  if (thiz->next_ts > thiz->segment->duration ||
+      (GST_CLOCK_TIME_IS_VALID (thiz->segment->stop) &&
+      thiz->next_ts > thiz->segment->stop)) {
+    GST_DEBUG ("EOS reached, current: %" GST_TIME_FORMAT " stop: %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (thiz->next_ts), GST_TIME_ARGS (thiz->segment->stop));
+    send_eos = TRUE;
+    goto pause;
+  }
+
+  if (thiz->next_ts < thiz->segment->start) {
+    GST_DEBUG ("Skipping out of segment buffer %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (thiz->next_ts));
+    goto done;
+  }
+
+  /* Finally send the buffer */
   buffer_size = gst_egueb_demux_get_size (thiz);
 
   /* We need to check downstream if the caps have changed so we can
    * allocate an optimus size of surface
    */
-  ret = gst_pad_alloc_buffer_and_set_caps (pad, thiz->last_ts,
+  ret = gst_pad_alloc_buffer_and_set_caps (pad, thiz->next_ts,
       buffer_size, GST_PAD_CAPS (pad), &buf);
   if (ret == GST_FLOW_OK) {
     new_buffer_size = GST_BUFFER_SIZE (buf);
     buffer_size = gst_egueb_demux_get_size (thiz);
     if (new_buffer_size != buffer_size) {
-      GST_ERROR_OBJECT (thiz, "different size %d %d", new_buffer_size, buffer_size);
+      GST_ERROR_OBJECT (thiz, "different size %lu %lu", new_buffer_size, buffer_size);
       gst_buffer_unref (buf);
       buf = NULL;
     }
@@ -356,24 +429,9 @@ gst_egueb_demux_loop (gpointer user_data)
 
   gst_egueb_demux_draw (thiz);
 
-  if (thiz->animation) {
-    egueb_smil_feature_animation_tick (thiz->animation);
-  }
-
-#if 0
-  /* TODO add a property to inform when to send an EOS, like after
-   * every animation has ended
-   */
-
-  /* we exit because we are done */
-  if (!eb) {
-    return GST_FLOW_UNEXPECTED;
-  }
-#endif
-
   gst_egueb_demux_convert (thiz, &buf);
   GST_DEBUG_OBJECT (thiz, "Sending buffer with ts: %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (thiz->last_ts));
+      GST_TIME_ARGS (thiz->next_ts));
 
   /* set the duration for the next buffer, this must be done after the tick in case
    * the QoS changed the fps on the svg
@@ -381,28 +439,44 @@ gst_egueb_demux_loop (gpointer user_data)
   thiz->duration = gst_util_uint64_scale (GST_SECOND, 1, thiz->fps);
   /* set the timestamp and duration baesed on the last timestamp set */
   GST_BUFFER_DURATION (buf) = thiz->duration;
-  GST_BUFFER_TIMESTAMP (buf) = thiz->last_ts;
-  thiz->last_ts += GST_BUFFER_DURATION (buf);
+  GST_BUFFER_TIMESTAMP (buf) = thiz->next_ts;
 
   ret = gst_pad_push (pad, buf);
-  if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_UNEXPECTED) {
-    GST_ELEMENT_ERROR (thiz, STREAM, FAILED,
-        ("Internal data flow error."),
-        ("streaming task paused, reason %s (%d)", gst_flow_get_name (ret),
-        ret));
-    goto eos;
+  if (ret != GST_FLOW_OK) {
+    if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_UNEXPECTED) {
+      GST_ELEMENT_ERROR (thiz, STREAM, FAILED,
+          ("Internal data flow error."),
+          ("streaming task paused, reason %s (%d)", gst_flow_get_name (ret),
+          ret));
+      send_eos = TRUE;
+    }
+    goto pause;
   }
 
-  goto done;
+  /* Prepare next buffer */
+  if (thiz->animation) {
+    /* TODO lock because of the fps change */
+    egueb_smil_feature_animation_tick (thiz->animation);
+    /* check if the current ts + duration is out of segment */
+  }
 
-eos:
-  GST_DEBUG_OBJECT (thiz, "Sending EOS");
-  gst_pad_push_event (pad, gst_event_new_eos ());
-  gst_pad_pause_task (pad);
+  thiz->next_ts += GST_BUFFER_DURATION (buf);
+  GST_SEGMENT_SET_POSITION (thiz->segment, thiz->next_ts);
 
 done:
   gst_object_unref (pad);
   return;
+
+pause:
+  {
+    GST_DEBUG_OBJECT (thiz, "Pausing pad task");
+    gst_pad_pause_task (pad);
+    if (send_eos) {
+      GST_DEBUG_OBJECT (thiz, "Sending EOS");
+      gst_pad_push_event (pad, gst_event_new_eos ());
+    }
+  }
+  goto done;
 }
 
 
@@ -415,8 +489,12 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   Egueb_Dom_Feature *render, *window, *ui;
   GstPad *pad;
   GstCaps *caps;
+#if HAVE_GST_1
+  GstMapInfo mi;
+#endif
   gboolean ret = FALSE;
   gchar *data;
+  guint8 *sdata;
   const gchar *reason = NULL;
 
   /* check if we have a valid xml */
@@ -426,8 +504,19 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   }
 
   /* create a buffer stream based on the input buffer */
-  data = malloc(GST_BUFFER_SIZE (buf));
-  memcpy (data, GST_BUFFER_DATA (buf), GST_BUFFER_SIZE (buf));
+  data = malloc (GST_BUFFER_SIZE (buf));
+
+#if HAVE_GST_1
+  gst_buffer_map (buf, &mi, GST_MAP_READ);
+  sdata = mi.data;
+#else
+  sdata = GST_BUFFER_DATA (buf);
+#endif
+  memcpy (data, sdata, GST_BUFFER_SIZE (buf));
+#if HAVE_GST_1
+  gst_buffer_unmap (buf, &mi);
+#endif
+
   /* the stream will free the data */
   s = enesim_stream_buffer_new (data, GST_BUFFER_SIZE (buf));
   gst_buffer_unref (buf);
@@ -498,13 +587,21 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
 
   /* set the caps, and start running */
   pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+#if HAVE_GST_1
+  caps = gst_pad_query_caps (pad, NULL);
+#else
   caps = gst_caps_copy (gst_pad_get_caps (pad));
+#endif
   gst_pad_fixate_caps (pad, caps);
   gst_pad_set_caps (pad, caps);
 
   /* start pushing buffers */
   GST_INFO_OBJECT (thiz, "Starting streaming task");
+#if HAVE_GST_1
+  gst_pad_start_task (pad, gst_egueb_demux_loop, thiz, NULL);
+#else
   gst_pad_start_task (pad, gst_egueb_demux_loop, thiz);
+#endif
   gst_object_unref (pad);
 
 no_window:
@@ -605,7 +702,7 @@ gst_egueb_svg_parse_naviation (GstEguebDemux * thiz, GstEvent * event)
 }
 
 static gboolean
-gst_egueb_demux_sink_event (GstPad * pad, GstEvent * event)
+gst_egueb_demux_sink_event (GstPad * pad, GstObject * obj, GstEvent * event)
 {
   gboolean ret = FALSE;
 
@@ -617,7 +714,7 @@ gst_egueb_demux_sink_event (GstPad * pad, GstEvent * event)
         GstBuffer *buf;
         gint len;
 
-        thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+        thiz = GST_EGUEB_DEMUX (obj);
         GST_DEBUG_OBJECT (thiz, "Received EOS");
         /* The EOS should come from upstream whenever the xml file
          * has been readed completely
@@ -628,7 +725,6 @@ gst_egueb_demux_sink_event (GstPad * pad, GstEvent * event)
         /* get the location */
         gst_egueb_demux_setup (thiz, buf);
         gst_event_unref (event);
-        gst_object_unref (thiz);
         ret = TRUE;
       }
       break;
@@ -641,26 +737,26 @@ gst_egueb_demux_sink_event (GstPad * pad, GstEvent * event)
 }
 
 static GstFlowReturn
-gst_egueb_demux_sink_chain (GstPad * pad, GstBuffer * buffer)
+gst_egueb_demux_sink_chain (GstPad * pad, GstObject * obj, GstBuffer * buffer)
 {
   GstEguebDemux *thiz;
   GstFlowReturn ret = GST_FLOW_OK;
 
-  thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+  thiz = GST_EGUEB_DEMUX (obj);
   GST_DEBUG_OBJECT (thiz, "Received buffer");
   gst_adapter_push (thiz->adapter, gst_buffer_ref (buffer));
-  gst_object_unref (thiz);
 
   return ret;
 }
 
 static gboolean
-gst_egueb_demux_src_event (GstPad * pad, GstEvent * event)
+gst_egueb_demux_src_event (GstPad * pad, GstObject * obj,
+    GstEvent * event)
 {
   GstEguebDemux *thiz;
   gboolean ret = FALSE;
 
-  thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+  thiz = GST_EGUEB_DEMUX (obj);
   GST_DEBUG_OBJECT (thiz, "Received event '%s'", GST_EVENT_TYPE_NAME (event));
 
   switch (GST_EVENT_TYPE (event)) {
@@ -704,18 +800,17 @@ gst_egueb_demux_src_event (GstPad * pad, GstEvent * event)
     break;
   }
 
-  gst_object_unref (thiz);
-
   return ret;
 }
 
 static gboolean
-gst_egueb_demux_src_query (GstPad * pad, GstQuery * query)
+gst_egueb_demux_src_query (GstPad * pad, GstObject * obj,
+    GstQuery * query)
 {
   GstEguebDemux *thiz;
   gboolean ret = FALSE;
 
-  thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+  thiz = GST_EGUEB_DEMUX (obj);
   GST_DEBUG_OBJECT (thiz, "Received query '%s'", GST_QUERY_TYPE_NAME (query));
 
   switch (GST_QUERY_TYPE (query)) {
@@ -730,10 +825,63 @@ gst_egueb_demux_src_query (GstPad * pad, GstQuery * query)
     break;
   }
 
-  gst_object_unref (thiz);
+  return ret;
+}
+
+
+#if !HAVE_GST_1
+
+static gboolean
+gst_egueb_demux_sink_event_simple (GstPad * pad, GstEvent * event)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_sink_event (pad, object, event);
+  gst_object_unref (object);
+  return ret;
+}
+
+
+static GstFlowReturn
+gst_egueb_demux_sink_chain_simple (GstPad * pad, GstBuffer * buffer)
+{
+  GstObject *object;
+  GstFlowReturn ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_sink_chain (pad, object, buffer);
+  gst_object_unref (object);
 
   return ret;
 }
+
+static gboolean
+gst_egueb_demux_src_event_simple (GstPad * pad, GstEvent * event)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_src_event (pad, object, event);
+  gst_object_unref (object);
+  return ret;
+}
+
+
+static gboolean
+gst_egueb_demux_src_query_simple (GstPad * pad, GstQuery * query)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_src_query (pad, object, query);
+  gst_object_unref (object);
+  return ret;
+}
+#endif
 
 #if 0
 static gboolean
@@ -1006,10 +1154,17 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
   /* Create the pads */
   pad = gst_pad_new_from_static_template (&gst_egueb_demux_sink_factory,
       "sink");
-  gst_pad_set_event_function (pad,
+#if HAVE_GST_1
+  gst_pad_set_event_function (GST_PAD (pad),
       GST_DEBUG_FUNCPTR (gst_egueb_demux_sink_event));
-  gst_pad_set_chain_function (pad,
+  gst_pad_set_chain_function (GST_PAD (pad),
       GST_DEBUG_FUNCPTR (gst_egueb_demux_sink_chain));
+#else
+  gst_pad_set_event_function (GST_PAD (pad),
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_sink_event_simple));
+  gst_pad_set_chain_function (GST_PAD (pad),
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_sink_chain_simple));
+#endif
   gst_element_add_pad (GST_ELEMENT (thiz), pad);
 
   pad = gst_pad_new_from_static_template (&gst_egueb_demux_src_factory,
@@ -1020,18 +1175,28 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_get_caps));
   gst_pad_set_fixatecaps_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_fixate_caps));
+#if HAVE_GST_1
   gst_pad_set_event_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_event));
   gst_pad_set_query_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_query));
+#else
+  gst_pad_set_event_function (pad,
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_event_simple));
+  gst_pad_set_query_function (pad,
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_query_simple));
+#endif
   gst_element_add_pad (GST_ELEMENT (thiz), pad);
 
   /* our internal members */
   thiz->adapter = gst_adapter_new ();
+  thiz->segment = gst_segment_new ();
+  gst_segment_init (thiz->segment, GST_FORMAT_TIME);
   thiz->doc_lock = g_mutex_new ();
   /* initial seek segment position */
   thiz->seek = GST_CLOCK_TIME_NONE;
-  thiz->last_ts = 0;
+  thiz->next_ts = 0;
+  thiz->send_ns = TRUE;
   thiz->last_stop = -1;
   /* set default properties */
   thiz->container_w = DEFAULT_CONTAINER_WIDTH;
@@ -1079,9 +1244,12 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
   /* TODO add the templates based on the implementation mime */
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_egueb_demux_sink_factory));
-  gst_element_class_set_details (element_class, &gst_egueb_demux_details);
-
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_egueb_demux_src_factory));
-  gst_element_class_set_details (element_class, &gst_egueb_demux_details);
+
+  gst_element_class_set_details_simple (element_class,
+      "Egueb SVG Parser/Demuxer/Decoder",
+      "Codec/Demuxer",
+      "Generates buffers with the SVG content rendered",
+      "<enesim-devel@googlegroups.com>");
 }
