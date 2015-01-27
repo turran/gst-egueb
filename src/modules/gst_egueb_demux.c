@@ -385,14 +385,15 @@ gst_egueb_demux_loop (gpointer user_data)
   thiz->last_ts += GST_BUFFER_DURATION (buf);
 
   ret = gst_pad_push (pad, buf);
-  if (ret != GST_FLOW_OK) {
-    GST_ERROR ("wrong %d", ret);
+  if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_UNEXPECTED) {
+    GST_ELEMENT_ERROR (thiz, STREAM, FAILED,
+        ("Internal data flow error."),
+        ("streaming task paused, reason %s (%d)", gst_flow_get_name (ret),
+        ret));
+    goto eos;
   }
 
   goto done;
-
-  /* TODO check return value */
-  return;
 
 eos:
   GST_DEBUG_OBJECT (thiz, "Sending EOS");
@@ -416,10 +417,11 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   GstCaps *caps;
   gboolean ret = FALSE;
   gchar *data;
+  const gchar *reason = NULL;
 
   /* check if we have a valid xml */
   if (!buf) {
-    GST_ERROR_OBJECT (thiz, "No buffer received");
+    reason = "No buffer received";
     goto beach;
   }
 
@@ -433,7 +435,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   /* parse the document */
   egueb_dom_parser_parse (s, &doc);
   if (!doc) {
-    GST_ERROR_OBJECT (thiz, "Failed parsing the document");
+    reason = "Failed parsing the document";
     goto beach;
   }
 
@@ -441,7 +443,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   /* TODO add events to know whenever the topmost element has changed */
   topmost = egueb_dom_document_document_element_get(doc);
   if (!topmost) {
-    GST_ERROR_OBJECT (thiz, "Topmost element not found");
+    reason = "Topmost element not found";
     goto no_topmost;
   }
 
@@ -449,7 +451,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
       NULL);
   if (!render)
   {
-    GST_ERROR_OBJECT (thiz, "No 'render' feature found, nothing to do");
+    reason = "No 'render' feature found, nothing to do";
     goto no_render;
   }
 
@@ -457,7 +459,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
       NULL);
   if (!window)
   {
-    GST_ERROR_OBJECT (thiz, "No 'window' feature found, nothing to do");
+    reason = "No 'window' feature found, nothing to do";
     goto no_window;
   }
 
@@ -499,7 +501,9 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   caps = gst_caps_copy (gst_pad_get_caps (pad));
   gst_pad_fixate_caps (pad, caps);
   gst_pad_set_caps (pad, caps);
+
   /* start pushing buffers */
+  GST_INFO_OBJECT (thiz, "Starting streaming task");
   gst_pad_start_task (pad, gst_egueb_demux_loop, thiz);
   gst_object_unref (pad);
 
@@ -510,6 +514,12 @@ no_render:
 no_topmost:
   egueb_dom_node_unref(doc);
 beach:
+
+  if (!ret) {
+    GST_ELEMENT_ERROR (thiz, RESOURCE, FAILED,
+        ("Impossible to setup the streaming task."),
+        ("%s", reason));
+  }
 
   return ret;
 }
