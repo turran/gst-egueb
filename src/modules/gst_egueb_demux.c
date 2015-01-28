@@ -21,6 +21,11 @@ GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
 #define DEFAULT_CONTAINER_WIDTH 256
 #define DEFAULT_CONTAINER_HEIGHT 256
 
+/* Forward declarations */
+static void
+gst_egueb_demux_src_loop (gpointer user_data);
+static void
+gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps);
 
 G_DEFINE_TYPE (GstEguebDemux, gst_egueb_demux, GST_TYPE_ELEMENT);
 
@@ -38,15 +43,21 @@ static GstStaticPadTemplate gst_egueb_demux_src_factory =
 GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw-rgb, "
-        "framerate = (fraction) [ 0, MAX ], "
+    GST_STATIC_CAPS (
+#if HAVE_GST_1
+        "video/x-raw, "
+        "format = BGRx, "
+#else
+        "video/x-raw-rgb, "
         "depth = 24, "
         "bpp = 32, "
         "endianness = (int)4321, "
         "red_mask = 0x0000ff00, "
         "green_mask = 0x00ff0000, "
         "blue_mask = 0xff000000, "
+#endif
         "framerate = (fraction) [ 1, MAX], "
+        "pixel-aspect-ratio = (fraction) [ 1, MAX ], "
         "width = (int) [ 1, MAX ], "
         "height = (int) [ 1, MAX ]")
     );
@@ -102,15 +113,17 @@ gst_egueb_demux_location_get (GstPad * pad)
         g_free (scheme);
       }
     } else {
-      GstPad *sink_pad;
+      GstPad *sink_pad = NULL;
       GstIterator *iter;
+      GstIteratorResult iter_res;
 
       /* iterate over the sink pads */
       iter = gst_element_iterate_sink_pads (GST_ELEMENT (parent));
-      while (gst_iterator_next (iter,
-              (gpointer) & sink_pad) != GST_ITERATOR_DONE) {
+      while ((iter_res = gst_iterator_next (iter,
+              (gpointer) & sink_pad)) != GST_ITERATOR_DONE) {
         GstPad *peer;
 
+        GST_ERROR ("iter res = %d", iter_res);
         peer = gst_pad_get_peer (sink_pad);
         uri = gst_egueb_demux_location_get (peer);
         gst_object_unref (sink_pad);
@@ -134,15 +147,17 @@ gst_egueb_demux_uri_get (GstEguebDemux * thiz)
   gchar *uri = NULL;
   gboolean ret;
 
-  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "sink");
   peer = gst_pad_get_peer (pad);
 
   query = gst_query_new_uri ();
   if (gst_pad_query (peer, query)) {
     gst_query_parse_uri (query, &uri);
+    GST_DEBUG_OBJECT (thiz, "Querying the URI succeeded '%s'", uri);
   }
 
   if (!uri) {
+    GST_DEBUG_OBJECT (thiz, "No URI found, looking for a location");
     uri = gst_egueb_demux_location_get (peer);
   }
   gst_query_unref (query);
@@ -291,194 +306,25 @@ gst_egueb_demux_convert (GstEguebDemux * thiz, GstBuffer **buffer)
 
 }
 
-static void
-gst_egueb_demux_loop (gpointer user_data)
-{
-  GstEguebDemux *thiz;
-  GstFlowReturn ret;
-  GstClockID id;
-  GstBuffer *buf = NULL;
-  GstPad *pad;
-  GstClockTime next;
-  Enesim_Buffer *eb;
-  Enesim_Buffer_Sw_Data sw_data;
-  gboolean send_eos = FALSE;
-  gulong buffer_size;
-  gulong new_buffer_size;
-  gint fps;
 
-  thiz = GST_EGUEB_DEMUX (user_data);
-  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
 
-  GST_DEBUG_OBJECT (thiz, "Creating buffer at %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (thiz->next_ts));
-
-  /* check if we need to update the duration */
-  if (thiz->animation) {
-    Egueb_Smil_Clock clock;
-    gint64 new_duration = GST_CLOCK_TIME_NONE;
-
-    if (!egueb_smil_feature_animation_has_animations (thiz->animation))
-      send_eos = TRUE;
-
-    if (egueb_smil_feature_animation_duration_get (thiz->animation, &clock))
-      new_duration = clock;
-
-    /* Create the new segment */
-    if (new_duration != thiz->segment->duration) {
-      /* TODO inform the application that a new duration is available */
-      gst_segment_set_duration (thiz->segment, GST_FORMAT_TIME, new_duration);
-    }
-  } else {
-    send_eos = TRUE;
-  }
-
-  /* apply the pending segment */
-  if (thiz->pending_segment) {
-    gint64 new_start, new_stop;
-
-    if (gst_segment_clip (thiz->segment, GST_FORMAT_TIME,
-        thiz->pending_segment->start, thiz->pending_segment->stop,
-        &new_start, &new_stop)) {
-
-      /* close previous segment and send a new one of we need to */
-      if (thiz->segment->start != new_start || thiz->segment->stop !=
-          new_stop) {
-        GstEvent *event;
-
-        /* close the segment */
-        GST_DEBUG_OBJECT (thiz, "Closing running segment %" GST_SEGMENT_FORMAT,
-            thiz->segment);
-
-#if HAVE_GST_0
-        gst_pad_push_event (pad, gst_event_new_new_segment (TRUE,
-            thiz->segment->rate, thiz->segment->format,
-            thiz->segment->start, thiz->segment->stop,
-            GST_SEGMENT_GET_POSITION (thiz->segment)));
-#endif
-
-        thiz->segment->start = new_start;
-        thiz->segment->stop = new_stop;
-        thiz->send_ns = TRUE;
-#if 0
-        /* do the seek on the animation feature */
-        egueb_smil_feature_animation_time_set (thiz->animation,
-            thiz->segment->start);
-#endif
-        thiz->next_ts = new_start;
-        GST_SEGMENT_SET_POSITION (thiz->segment, new_start);
-      }
-    }
-
-    gst_segment_free (thiz->pending_segment);
-    thiz->pending_segment = NULL;
-  }
-
-  if (thiz->send_ns) {
-    GstEvent *event;
-
-    GST_DEBUG_OBJECT (thiz, "Sending new segment %" GST_SEGMENT_FORMAT,
-        thiz->segment);
 #if HAVE_GST_1
-    event = gst_event_new_segment (thiz->segment);
-#else
-    event = gst_event_new_new_segment (FALSE,
-        thiz->segment->rate, thiz->segment->format,
-        thiz->segment->start, thiz->segment->stop,
-        GST_SEGMENT_GET_POSITION (thiz->segment));
-#endif
-    gst_pad_push_event (pad, event);
-    thiz->send_ns = FALSE;
-  }
+static void
+gst_egueb_demux_start (GstEguebDemux * thiz)
+{
+  GstPad *pad;
+  GstEvent *event;
+  gchar *stream_id;
 
-  /* check if the current ts is out of segment */
-  if (thiz->next_ts > thiz->segment->duration ||
-      (GST_CLOCK_TIME_IS_VALID (thiz->segment->stop) &&
-      thiz->next_ts > thiz->segment->stop)) {
-    GST_DEBUG ("EOS reached, current: %" GST_TIME_FORMAT " stop: %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (thiz->next_ts), GST_TIME_ARGS (thiz->segment->stop));
-    send_eos = TRUE;
-    goto pause;
-  }
-
-  if (thiz->next_ts < thiz->segment->start) {
-    GST_DEBUG ("Skipping out of segment buffer %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (thiz->next_ts));
-    goto done;
-  }
-
-  /* Finally send the buffer */
-  buffer_size = gst_egueb_demux_get_size (thiz);
-
-  /* We need to check downstream if the caps have changed so we can
-   * allocate an optimus size of surface
-   */
-  ret = gst_pad_alloc_buffer_and_set_caps (pad, thiz->next_ts,
-      buffer_size, GST_PAD_CAPS (pad), &buf);
-  if (ret == GST_FLOW_OK) {
-    new_buffer_size = GST_BUFFER_SIZE (buf);
-    buffer_size = gst_egueb_demux_get_size (thiz);
-    if (new_buffer_size != buffer_size) {
-      GST_ERROR_OBJECT (thiz, "different size %lu %lu", new_buffer_size, buffer_size);
-      gst_buffer_unref (buf);
-      buf = NULL;
-    }
-  } else {
-    buf = NULL;
-  }
-
-  gst_egueb_demux_draw (thiz);
-
-  gst_egueb_demux_convert (thiz, &buf);
-  GST_DEBUG_OBJECT (thiz, "Sending buffer with ts: %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (thiz->next_ts));
-
-  /* set the duration for the next buffer, this must be done after the tick in case
-   * the QoS changed the fps on the svg
-   */
-  thiz->duration = gst_util_uint64_scale (GST_SECOND, 1, thiz->fps);
-  /* set the timestamp and duration baesed on the last timestamp set */
-  GST_BUFFER_DURATION (buf) = thiz->duration;
-  GST_BUFFER_TIMESTAMP (buf) = thiz->next_ts;
-
-  ret = gst_pad_push (pad, buf);
-  if (ret != GST_FLOW_OK) {
-    if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_UNEXPECTED) {
-      GST_ELEMENT_ERROR (thiz, STREAM, FAILED,
-          ("Internal data flow error."),
-          ("streaming task paused, reason %s (%d)", gst_flow_get_name (ret),
-          ret));
-      send_eos = TRUE;
-    }
-    goto pause;
-  }
-
-  /* Prepare next buffer */
-  if (thiz->animation) {
-    /* TODO lock because of the fps change */
-    egueb_smil_feature_animation_tick (thiz->animation);
-    /* check if the current ts + duration is out of segment */
-  }
-
-  thiz->next_ts += GST_BUFFER_DURATION (buf);
-  GST_SEGMENT_SET_POSITION (thiz->segment, thiz->next_ts);
-
-done:
+  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+  stream_id =
+      gst_pad_create_stream_id (pad, GST_ELEMENT_CAST (thiz), NULL);
+  GST_DEBUG_OBJECT (thiz, "Sending STREAM START with id '%s'", stream_id);
+  gst_pad_push_event (pad, gst_event_new_stream_start (stream_id));
   gst_object_unref (pad);
-  return;
-
-pause:
-  {
-    GST_DEBUG_OBJECT (thiz, "Pausing pad task");
-    gst_pad_pause_task (pad);
-    if (send_eos) {
-      GST_DEBUG_OBJECT (thiz, "Sending EOS");
-      gst_pad_push_event (pad, gst_event_new_eos ());
-    }
-  }
-  goto done;
+  g_free (stream_id);
 }
-
+#endif
 
 static gboolean
 gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
@@ -495,6 +341,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   gboolean ret = FALSE;
   gchar *data;
   guint8 *sdata;
+  gint ssize;
   const gchar *reason = NULL;
 
   /* check if we have a valid xml */
@@ -503,22 +350,24 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
     goto beach;
   }
 
-  /* create a buffer stream based on the input buffer */
-  data = malloc (GST_BUFFER_SIZE (buf));
-
 #if HAVE_GST_1
   gst_buffer_map (buf, &mi, GST_MAP_READ);
   sdata = mi.data;
+  ssize = mi.size;
 #else
   sdata = GST_BUFFER_DATA (buf);
+  ssize = GST_BUFFER_SIZE (buf);
 #endif
-  memcpy (data, sdata, GST_BUFFER_SIZE (buf));
+
+  /* create a buffer stream based on the input buffer */
+  data = malloc (ssize);
+  memcpy (data, sdata, ssize);
 #if HAVE_GST_1
   gst_buffer_unmap (buf, &mi);
 #endif
 
   /* the stream will free the data */
-  s = enesim_stream_buffer_new (data, GST_BUFFER_SIZE (buf));
+  s = enesim_stream_buffer_new (data, ssize);
   gst_buffer_unref (buf);
 
   /* parse the document */
@@ -588,19 +437,24 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   /* set the caps, and start running */
   pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
 #if HAVE_GST_1
+  /* send the start stream */
+  gst_egueb_demux_start (thiz);
   caps = gst_pad_query_caps (pad, NULL);
+  gst_caps_make_writable (caps);
+  gst_egueb_demux_src_fixate_caps (pad, caps);
 #else
   caps = gst_caps_copy (gst_pad_get_caps (pad));
-#endif
   gst_pad_fixate_caps (pad, caps);
+#endif
   gst_pad_set_caps (pad, caps);
 
   /* start pushing buffers */
   GST_INFO_OBJECT (thiz, "Starting streaming task");
+  /* TODO pass the pad itself */
 #if HAVE_GST_1
-  gst_pad_start_task (pad, gst_egueb_demux_loop, thiz, NULL);
+  gst_pad_start_task (pad, gst_egueb_demux_src_loop, thiz, NULL);
 #else
-  gst_pad_start_task (pad, gst_egueb_demux_loop, thiz);
+  gst_pad_start_task (pad, gst_egueb_demux_src_loop, thiz);
 #endif
   gst_object_unref (pad);
 
@@ -704,30 +558,40 @@ gst_egueb_svg_parse_naviation (GstEguebDemux * thiz, GstEvent * event)
 static gboolean
 gst_egueb_demux_sink_event (GstPad * pad, GstObject * obj, GstEvent * event)
 {
+  GstEguebDemux *thiz;
   gboolean ret = FALSE;
 
+  thiz = GST_EGUEB_DEMUX (obj);
+  GST_DEBUG_OBJECT (thiz, "Received event '%s'", GST_EVENT_TYPE_NAME (event));
   /* TODO later we need to handle FLUSH_START to flush the adapter too */
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_EOS:
       {
-        GstEguebDemux *thiz;
-        GstBuffer *buf;
         gint len;
 
-        thiz = GST_EGUEB_DEMUX (obj);
         GST_DEBUG_OBJECT (thiz, "Received EOS");
         /* The EOS should come from upstream whenever the xml file
          * has been readed completely
          */
         len = gst_adapter_available (thiz->adapter);
-        buf = gst_adapter_take_buffer (thiz->adapter, len);
+        if (len) {
+            GstBuffer *buf;
 
-        /* get the location */
-        gst_egueb_demux_setup (thiz, buf);
+            buf = gst_adapter_take_buffer (thiz->adapter, len);
+            gst_egueb_demux_setup (thiz, buf);
+        }
         gst_event_unref (event);
         ret = TRUE;
       }
       break;
+
+#if HAVE_GST_1
+    case GST_EVENT_STREAM_START:
+    case GST_EVENT_SEGMENT:
+      gst_event_unref (event);
+      ret = TRUE;
+      break;
+#endif
 
     default:
       break;
@@ -749,157 +613,6 @@ gst_egueb_demux_sink_chain (GstPad * pad, GstObject * obj, GstBuffer * buffer)
   return ret;
 }
 
-static gboolean
-gst_egueb_demux_src_event (GstPad * pad, GstObject * obj,
-    GstEvent * event)
-{
-  GstEguebDemux *thiz;
-  gboolean ret = FALSE;
-
-  thiz = GST_EGUEB_DEMUX (obj);
-  GST_DEBUG_OBJECT (thiz, "Received event '%s'", GST_EVENT_TYPE_NAME (event));
-
-  switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_QOS:{
-    GstQOSType type;
-    GstClockTimeDiff diff;
-    GstClockTime timestamp;
-    gdouble proportion;
-    gint fps_n;
-    gint fps_d;
-    gint fps;
-
-    /* Whenever we receive a QoS we can decide to increase the fps
-     * on egueb and send more intermediate frames
-     */
-    gst_event_parse_qos_full (event, &type, &proportion, &diff, &timestamp);
-    fps_d = thiz->spf_n;
-    fps_n = thiz->spf_d;
-
-    if (proportion > 1.0) {
-      fps_d = fps_d * proportion;
-    } else {
-      fps_n = fps_n + ((1 - proportion) * fps_n);
-    }
-
-    fps = gst_util_uint64_scale (1, fps_n, fps_d);
-    if (fps < 1) fps = 1;
-    GST_DEBUG_OBJECT (thiz, "Updating framerate to %d/%d", fps_n, fps_d);
-    thiz->fps = fps;
-    egueb_smil_feature_animation_fps_set(thiz->animation, fps);
-    }
-    break;
-
-    case GST_EVENT_NAVIGATION:
-    g_mutex_lock (thiz->doc_lock);
-    ret = gst_egueb_svg_parse_naviation (thiz, event);
-    g_mutex_unlock (thiz->doc_lock);
-    break;
-
-    default:
-    break;
-  }
-
-  return ret;
-}
-
-static gboolean
-gst_egueb_demux_src_query (GstPad * pad, GstObject * obj,
-    GstQuery * query)
-{
-  GstEguebDemux *thiz;
-  gboolean ret = FALSE;
-
-  thiz = GST_EGUEB_DEMUX (obj);
-  GST_DEBUG_OBJECT (thiz, "Received query '%s'", GST_QUERY_TYPE_NAME (query));
-
-  switch (GST_QUERY_TYPE (query)) {
-    case GST_QUERY_DURATION:
-    if (thiz->last_stop >= 0) {
-      gst_query_set_duration(query, GST_FORMAT_TIME, thiz->last_stop); 
-      ret = TRUE;
-    }
-    break;
-
-    default:
-    break;
-  }
-
-  return ret;
-}
-
-
-#if !HAVE_GST_1
-
-static gboolean
-gst_egueb_demux_sink_event_simple (GstPad * pad, GstEvent * event)
-{
-  GstObject *object;
-  gboolean ret;
-
-  object = gst_pad_get_parent (pad);
-  ret = gst_egueb_demux_sink_event (pad, object, event);
-  gst_object_unref (object);
-  return ret;
-}
-
-
-static GstFlowReturn
-gst_egueb_demux_sink_chain_simple (GstPad * pad, GstBuffer * buffer)
-{
-  GstObject *object;
-  GstFlowReturn ret;
-
-  object = gst_pad_get_parent (pad);
-  ret = gst_egueb_demux_sink_chain (pad, object, buffer);
-  gst_object_unref (object);
-
-  return ret;
-}
-
-static gboolean
-gst_egueb_demux_src_event_simple (GstPad * pad, GstEvent * event)
-{
-  GstObject *object;
-  gboolean ret;
-
-  object = gst_pad_get_parent (pad);
-  ret = gst_egueb_demux_src_event (pad, object, event);
-  gst_object_unref (object);
-  return ret;
-}
-
-
-static gboolean
-gst_egueb_demux_src_query_simple (GstPad * pad, GstQuery * query)
-{
-  GstObject *object;
-  gboolean ret;
-
-  object = gst_pad_get_parent (pad);
-  ret = gst_egueb_demux_src_query (pad, object, query);
-  gst_object_unref (object);
-  return ret;
-}
-#endif
-
-#if 0
-static gboolean
-gst_egueb_demux_do_seek (GstBaseSrc *src, GstSegment *segment)
-{
-  GstEguebDemux *thiz = GST_EGUEB_DEMUX (src);
-
-  g_mutex_lock (thiz->doc_lock);
-  /* TODO find the nearest keyframe based on the fps */
-  GST_DEBUG_OBJECT (src, "do seek at %" GST_TIME_FORMAT, GST_TIME_ARGS (segment->start));
-  /* do the seek on the svg element */
-  thiz->seek = segment->start;
-  g_mutex_unlock (thiz->doc_lock);
-
-  return TRUE;
-}
-#endif
-
 static void
 gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)
 {
@@ -920,6 +633,8 @@ gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)
         thiz->container_h);
     /* fixate the framerate in case nobody has set it */
     gst_structure_fixate_field_nearest_fraction (structure, "framerate", 30, 1);
+    /* fixate the framerate in case nobody has set it */
+    gst_structure_fixate_field_nearest_fraction (structure, "pixel-aspect-ratio", 1, 1);
   }
 
   gst_object_unref (thiz);
@@ -1034,6 +749,491 @@ gst_egueb_demux_src_set_caps (GstPad * pad, GstCaps * caps)
 
   return TRUE;
 }
+
+#if 0
+static gboolean
+gst_egueb_demux_do_seek (GstBaseSrc *src, GstSegment *segment)
+{
+  GstEguebDemux *thiz = GST_EGUEB_DEMUX (src);
+
+  g_mutex_lock (thiz->doc_lock);
+  /* TODO find the nearest keyframe based on the fps */
+  GST_DEBUG_OBJECT (src, "do seek at %" GST_TIME_FORMAT, GST_TIME_ARGS (segment->start));
+  /* do the seek on the svg element */
+  thiz->seek = segment->start;
+  g_mutex_unlock (thiz->doc_lock);
+
+  return TRUE;
+}
+#endif
+
+#if HAVE_GST_1
+static gboolean
+gst_egueb_demux_decide_allocation (GstEguebDemux * thiz, GstQuery * query)
+{
+  GstBufferPool *pool;
+  GstStructure *config;
+  GstCaps *caps = NULL;
+  gulong buffer_size;
+  guint size, min, max;
+
+  buffer_size = gst_egueb_demux_get_size (thiz);
+  if (gst_query_get_n_allocation_pools (query) > 0) {
+    gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
+    /* adjust size */
+    size = MAX (size, buffer_size);
+  } else {
+    /* no downstream pool, make our own */
+    pool = gst_video_buffer_pool_new ();
+    size = buffer_size;
+    min = max = 0;
+  }
+
+  if (pool == thiz->pool) {
+    gst_object_unref (pool);
+    return TRUE;
+  }
+
+  /* now configure */
+  gst_query_parse_allocation (query, &caps, NULL);
+  config = gst_buffer_pool_get_config (pool);
+  gst_buffer_pool_config_set_params (config, caps, size, min, max);
+  gst_buffer_pool_set_config (pool, config);
+
+  if (thiz->pool) {
+    gst_buffer_pool_set_active (pool, FALSE);
+    gst_object_unref (thiz->pool);
+  }
+
+  thiz->pool = pool;
+  gst_buffer_pool_set_active (pool, TRUE);
+
+  return TRUE;
+}
+
+static gboolean
+gst_egueb_demux_src_negotiate_caps (GstPad * pad)
+{
+  GstEguebDemux *thiz;
+  GstBuffer *buf = NULL;
+  GstCaps *caps, *ourcaps, *peercaps;
+  gboolean ret = FALSE;
+
+  thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+  ourcaps = gst_pad_query_caps (pad, NULL);
+  GST_DEBUG_OBJECT (thiz, "Our caps are %" GST_PTR_FORMAT, ourcaps);
+  peercaps = gst_pad_peer_query_caps (pad, ourcaps);
+  GST_DEBUG_OBJECT (thiz, "Peer caps are %" GST_PTR_FORMAT, peercaps);
+  if (peercaps) {
+    caps = peercaps;
+    gst_caps_unref (ourcaps);
+  } else {
+    caps = ourcaps;
+  }
+
+  if (caps && !gst_caps_is_empty (caps)) {
+    /* fixate the caps and try to set it */
+    gst_egueb_demux_src_fixate_caps (pad, caps);
+    ret = gst_egueb_demux_src_set_caps (pad, caps);
+  } else {
+    if (caps)
+      gst_caps_unref (caps);
+    GST_DEBUG_OBJECT (thiz, "No common caps");
+  }
+
+  gst_object_unref (thiz);
+
+  return ret;
+}
+#endif
+
+static GstBuffer * gst_egueb_demux_src_allocate_buffer (GstPad * pad)
+{
+  GstEguebDemux *thiz;
+  GstBuffer *buf = NULL;
+#if !HAVE_GST_1
+  gulong buffer_size;
+#endif
+
+  thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
+
+#if HAVE_GST_1
+  if (gst_pad_check_reconfigure (pad)) {
+    GstQuery *query;
+    GstCaps *caps;
+
+    /* renegotiate with downstream */
+    if (!gst_egueb_demux_src_negotiate_caps (pad)) {
+      GST_ERROR_OBJECT (thiz, "Failed negotiating caps");
+    }
+
+    /* set the pool/allocator/etc to do zero-copy */
+    caps = gst_pad_get_current_caps (pad);
+    query = gst_query_new_allocation (caps, TRUE);
+    if (!gst_pad_peer_query (pad, query)) {
+      GST_DEBUG_OBJECT (thiz, "Failed to query allocation");
+    }
+
+    gst_egueb_demux_decide_allocation (thiz, query);
+    gst_query_unref (query);
+
+    if (caps) {
+      gst_caps_unref (caps);
+    }
+  }
+
+  if (thiz->pool)
+    gst_buffer_pool_acquire_buffer (thiz->pool, &buf, NULL);
+
+#else
+  /* We need to check downstream if the caps have changed so we can
+   * allocate an optimum size of surface
+   */
+  buffer_size = gst_egueb_demux_get_size (thiz);
+  gst_pad_alloc_buffer_and_set_caps (pad, thiz->next_ts,
+      buffer_size, GST_PAD_CAPS (pad), &buf);
+#endif
+
+  gst_object_unref (thiz);
+
+  return buf;
+}
+
+static void
+gst_egueb_demux_src_loop (gpointer user_data)
+{
+  GstEguebDemux *thiz;
+  GstFlowReturn ret;
+  GstClockID id;
+  GstBuffer *buf = NULL;
+  GstPad *pad;
+  GstClockTime next;
+  Enesim_Buffer *eb;
+  Enesim_Buffer_Sw_Data sw_data;
+  gboolean send_eos = FALSE;
+  gulong new_buffer_size;
+  gint fps;
+
+  thiz = GST_EGUEB_DEMUX (user_data);
+  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+
+  GST_DEBUG_OBJECT (thiz, "Creating buffer at %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (thiz->next_ts));
+
+  /* check if we need to update the duration */
+  if (thiz->animation) {
+    Egueb_Smil_Clock clock;
+    gint64 new_duration = GST_CLOCK_TIME_NONE;
+
+    if (!egueb_smil_feature_animation_has_animations (thiz->animation))
+      send_eos = TRUE;
+
+    if (egueb_smil_feature_animation_duration_get (thiz->animation, &clock))
+      new_duration = clock;
+
+    /* Create the new segment */
+    if (new_duration != thiz->segment->duration) {
+      /* TODO inform the application that a new duration is available */
+      thiz->segment->duration = new_duration;
+    }
+  } else {
+    send_eos = TRUE;
+  }
+
+  /* apply the pending segment */
+  if (thiz->pending_segment) {
+    gint64 new_start, new_stop;
+
+    if (gst_segment_clip (thiz->segment, GST_FORMAT_TIME,
+        thiz->pending_segment->start, thiz->pending_segment->stop,
+        &new_start, &new_stop)) {
+
+      /* close previous segment and send a new one of we need to */
+      if (thiz->segment->start != new_start || thiz->segment->stop !=
+          new_stop) {
+        GstEvent *event;
+
+        /* close the segment */
+        GST_DEBUG_OBJECT (thiz, "Closing running segment %" GST_SEGMENT_FORMAT,
+            thiz->segment);
+
+#if HAVE_GST_0
+        gst_pad_push_event (pad, gst_event_new_new_segment (TRUE,
+            thiz->segment->rate, thiz->segment->format,
+            thiz->segment->start, thiz->segment->stop,
+            GST_SEGMENT_GET_POSITION (thiz->segment)));
+#endif
+
+        thiz->segment->start = new_start;
+        thiz->segment->stop = new_stop;
+        thiz->send_ns = TRUE;
+#if 0
+        /* do the seek on the animation feature */
+        egueb_smil_feature_animation_time_set (thiz->animation,
+            thiz->segment->start);
+#endif
+        thiz->next_ts = new_start;
+        GST_SEGMENT_SET_POSITION (thiz->segment, new_start);
+      }
+    }
+
+    gst_segment_free (thiz->pending_segment);
+    thiz->pending_segment = NULL;
+  }
+
+  if (thiz->send_ns) {
+    GstEvent *event;
+
+    GST_DEBUG_OBJECT (thiz, "Sending new segment %" GST_SEGMENT_FORMAT,
+        thiz->segment);
+#if HAVE_GST_1
+    event = gst_event_new_segment (thiz->segment);
+#else
+    event = gst_event_new_new_segment (FALSE,
+        thiz->segment->rate, thiz->segment->format,
+        thiz->segment->start, thiz->segment->stop,
+        GST_SEGMENT_GET_POSITION (thiz->segment));
+#endif
+    gst_pad_push_event (pad, event);
+    thiz->send_ns = FALSE;
+  }
+
+  /* check if the current ts is out of segment */
+  if (thiz->next_ts > thiz->segment->duration ||
+      (GST_CLOCK_TIME_IS_VALID (thiz->segment->stop) &&
+      thiz->next_ts > thiz->segment->stop)) {
+    GST_DEBUG ("EOS reached, current: %" GST_TIME_FORMAT " stop: %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (thiz->next_ts), GST_TIME_ARGS (thiz->segment->stop));
+    send_eos = TRUE;
+    goto pause;
+  }
+
+  if (thiz->next_ts < thiz->segment->start) {
+    GST_DEBUG ("Skipping out of segment buffer %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (thiz->next_ts));
+    goto done;
+  }
+
+  /* allocate our buffer */
+  buf = gst_egueb_demux_src_allocate_buffer (pad);
+  if (!buf) {
+    GST_ELEMENT_ERROR (thiz, STREAM, FAILED,
+        ("Internal data flow error."), ("Failed to allocate buffer."));
+    send_eos = TRUE;
+    goto pause;
+  }
+
+  gst_egueb_demux_draw (thiz);
+
+  gst_egueb_demux_convert (thiz, &buf);
+  GST_DEBUG_OBJECT (thiz, "Sending buffer with ts: %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (thiz->next_ts));
+
+  /* set the duration for the next buffer, this must be done after the tick in case
+   * the QoS changed the fps on the svg
+   */
+  thiz->duration = gst_util_uint64_scale (GST_SECOND, 1, thiz->fps);
+  /* set the timestamp and duration baesed on the last timestamp set */
+  GST_BUFFER_DURATION (buf) = thiz->duration;
+  GST_BUFFER_TIMESTAMP (buf) = thiz->next_ts;
+
+  ret = gst_pad_push (pad, buf);
+  if (ret != GST_FLOW_OK) {
+    if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_UNEXPECTED) {
+      GST_ELEMENT_ERROR (thiz, STREAM, FAILED,
+          ("Internal data flow error."),
+          ("Failed pushing, reason %s (%d)", gst_flow_get_name (ret),
+          ret));
+      send_eos = TRUE;
+    }
+    goto pause;
+  }
+
+  /* Prepare next buffer */
+  if (thiz->animation) {
+    /* TODO lock because of the fps change */
+    egueb_smil_feature_animation_tick (thiz->animation);
+    /* check if the current ts + duration is out of segment */
+  }
+
+  thiz->next_ts += GST_BUFFER_DURATION (buf);
+  GST_SEGMENT_SET_POSITION (thiz->segment, thiz->next_ts);
+
+done:
+  gst_object_unref (pad);
+  return;
+
+pause:
+  {
+    GST_DEBUG_OBJECT (thiz, "Pausing pad task");
+    gst_pad_pause_task (pad);
+    if (send_eos) {
+      GST_DEBUG_OBJECT (thiz, "Sending EOS");
+      gst_pad_push_event (pad, gst_event_new_eos ());
+    }
+  }
+  goto done;
+}
+
+static gboolean
+gst_egueb_demux_src_event (GstPad * pad, GstObject * obj,
+    GstEvent * event)
+{
+  GstEguebDemux *thiz;
+  gboolean ret = FALSE;
+
+  thiz = GST_EGUEB_DEMUX (obj);
+  GST_DEBUG_OBJECT (thiz, "Received event '%s'", GST_EVENT_TYPE_NAME (event));
+
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_QOS:{
+    GstQOSType type;
+    GstClockTimeDiff diff;
+    GstClockTime timestamp;
+    gdouble proportion;
+    gint fps_n;
+    gint fps_d;
+    gint fps;
+
+    /* Whenever we receive a QoS we can decide to increase the fps
+     * on egueb and send more intermediate frames
+     */
+#if HAVE_GST_1
+    gst_event_parse_qos (event, &type, &proportion, &diff, &timestamp);
+#else
+    gst_event_parse_qos_full (event, &type, &proportion, &diff, &timestamp);
+#endif
+    fps_d = thiz->spf_n;
+    fps_n = thiz->spf_d;
+
+    if (proportion > 1.0) {
+      fps_d = fps_d * proportion;
+    } else {
+      fps_n = fps_n + ((1 - proportion) * fps_n);
+    }
+
+    fps = gst_util_uint64_scale (1, fps_n, fps_d);
+    if (fps < 1) fps = 1;
+    GST_DEBUG_OBJECT (thiz, "Updating framerate to %d/%d", fps_n, fps_d);
+    thiz->fps = fps;
+    egueb_smil_feature_animation_fps_set(thiz->animation, fps);
+    }
+    break;
+
+    case GST_EVENT_NAVIGATION:
+    g_mutex_lock (thiz->doc_lock);
+    ret = gst_egueb_svg_parse_naviation (thiz, event);
+    g_mutex_unlock (thiz->doc_lock);
+    break;
+
+#if HAVE_GST_1
+    case GST_EVENT_CAPS:
+      {
+        GstCaps *caps = NULL;
+        gst_event_parse_caps (event, &caps);
+        gst_egueb_demux_src_set_caps (pad, caps);
+      }
+      break;
+#endif
+
+    default:
+    break;
+  }
+
+  return ret;
+}
+
+static gboolean
+gst_egueb_demux_src_query (GstPad * pad, GstObject * obj,
+    GstQuery * query)
+{
+  GstEguebDemux *thiz;
+  gboolean ret = FALSE;
+
+  thiz = GST_EGUEB_DEMUX (obj);
+  GST_DEBUG_OBJECT (thiz, "Received query '%s'", GST_QUERY_TYPE_NAME (query));
+
+  switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_DURATION:
+      if (thiz->last_stop >= 0) {
+        gst_query_set_duration(query, GST_FORMAT_TIME, thiz->last_stop); 
+        ret = TRUE;
+      }
+      break;
+
+#if HAVE_GST_1
+    case GST_QUERY_CAPS:
+      {
+        GstCaps *caps;
+
+        caps = gst_egueb_demux_src_get_caps (pad);
+        /* TODO handle the filter */
+        gst_query_set_caps_result (query, caps);
+        ret = TRUE;
+      }
+      break;
+#endif
+
+    default:
+    break;
+  }
+
+  return ret;
+}
+
+
+#if !HAVE_GST_1
+static gboolean
+gst_egueb_demux_sink_event_simple (GstPad * pad, GstEvent * event)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_sink_event (pad, object, event);
+  gst_object_unref (object);
+  return ret;
+}
+
+
+static GstFlowReturn
+gst_egueb_demux_sink_chain_simple (GstPad * pad, GstBuffer * buffer)
+{
+  GstObject *object;
+  GstFlowReturn ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_sink_chain (pad, object, buffer);
+  gst_object_unref (object);
+
+  return ret;
+}
+
+static gboolean
+gst_egueb_demux_src_event_simple (GstPad * pad, GstEvent * event)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_src_event (pad, object, event);
+  gst_object_unref (object);
+  return ret;
+}
+
+
+static gboolean
+gst_egueb_demux_src_query_simple (GstPad * pad, GstQuery * query)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_src_query (pad, object, query);
+  gst_object_unref (object);
+  return ret;
+}
+#endif
 
 static void
 gst_egueb_demux_get_property (GObject * object, guint prop_id, GValue * value,
@@ -1169,18 +1369,18 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
 
   pad = gst_pad_new_from_static_template (&gst_egueb_demux_src_factory,
       "src");
-  gst_pad_set_setcaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_set_caps));
-  gst_pad_set_getcaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_get_caps));
-  gst_pad_set_fixatecaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_fixate_caps));
 #if HAVE_GST_1
   gst_pad_set_event_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_event));
   gst_pad_set_query_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_query));
 #else
+  gst_pad_set_fixatecaps_function (pad,
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_fixate_caps));
+  gst_pad_set_setcaps_function (pad,
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_set_caps));
+  gst_pad_set_getcaps_function (pad,
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_get_caps));
   gst_pad_set_event_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_src_event_simple));
   gst_pad_set_query_function (pad,

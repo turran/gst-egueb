@@ -9,6 +9,8 @@
 #include <gst/base/gstadapter.h>
 #if HAVE_GST_1
 #include <gst/video/navigation.h>
+#include <gst/video/gstvideometa.h>
+#include <gst/video/gstvideopool.h>
 #else
 #include <gst/interfaces/navigation.h>
 #endif
@@ -75,6 +77,9 @@ struct _GstEguebDemux
   Eina_List *damages;
   guint w;
   guint h;
+#if HAVE_GST_1
+  GstBufferPool *pool;
+#endif
 
   /* Animation feature */
   Egueb_Dom_Feature *animation;

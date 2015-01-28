@@ -6,6 +6,12 @@
 #include "gst_egueb_demux.h"
 #include "gst_egueb_type.h"
 
+#if HAVE_GST_1
+#define PLUGIN_NAME egueb
+#else
+#define PLUGIN_NAME "egueb"
+#endif
+
 GST_DEBUG_CATEGORY (gst_egueb_demux_debug);
 GST_DEBUG_CATEGORY (gst_egueb_document_debug);
 
@@ -27,7 +33,7 @@ plugin_init (GstPlugin * plugin)
 /* this is the structure that gstreamer looks for to register plugins
  */
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR, GST_VERSION_MINOR,
-    "egueb", "Egueb GStreamer Plugin",
+    PLUGIN_NAME, "Egueb GStreamer Plugin",
     plugin_init, VERSION, GST_LICENSE_UNKNOWN, PACKAGE_NAME,
     "http://www.turran.org");
 
