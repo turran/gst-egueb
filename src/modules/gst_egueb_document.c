@@ -1,4 +1,4 @@
-/* Gst Egueb - Gstreamer based plugins and libs for Egueb
+/* Gst-Egueb - GStreamer integration for Egueb
  * Copyright (C) 2014 Jorge Luis Zapata
  *
  * This library is free software; you can redistribute it and/or
@@ -20,6 +20,14 @@
 #include "config.h"
 #endif
 
+#if HAVE_GST_1
+#define DECODEBIN "decodebin"
+#define VIDEOCONVERT "videoconvert"
+#else
+#define DECODEBIN "decodebin2"
+#define VIDEOCONVERT "videoconvert"
+#endif
+
 #include "gst_egueb_document.h"
 
 GST_DEBUG_CATEGORY_EXTERN (gst_egueb_document_debug);
@@ -35,6 +43,7 @@ struct _Gst_Egueb_Document
 	Egueb_Dom_Node *doc;
 	Egueb_Dom_Node *topmost;
 	Egueb_Dom_Feature *io;
+	Egueb_Dom_Feature *multimedia;
 };
 
 typedef struct _Gst_Egueb_Document_Pipeline
@@ -94,7 +103,6 @@ _gst_egueb_document_data_fakesink_handoff_cb (GstElement * object,
 #endif
 	guint8 *bdata;
 	gint bsize;
-
 
 #if HAVE_GST_1
 	gst_buffer_map(buf, &mi, GST_MAP_READ);
@@ -194,24 +202,29 @@ _gst_egueb_document_image_fakesink_handoff_cb (GstElement * object,
 	enesim_renderer_unref(r);
 }
 
-static void _gst_egueb_document_image_decodebin2_pad_added_cb (
+static void _gst_egueb_document_image_decodebin_pad_added_cb (
 		GstElement *src, GstPad *pad, gpointer data)
 {
 	Gst_Egueb_Document_Pipeline *p = data;
 	GstPadLinkReturn linked;
-	GstElement *ffmpegcolorspace;
+	GstElement *videoconvert;
 	GstElement *capsfilter;
 	GstElement *sink;
 	GstPad *sinkpad;
 	GstPad *srcpad;
 	GstCaps *caps;
 
-	/* connect a ffmpegcolorspace to output on the enesim format */
-	ffmpegcolorspace = gst_element_factory_make("ffmpegcolorspace", NULL);
+	/* connect a videoconvert to output on the enesim format */
+	videoconvert = gst_element_factory_make(VIDEOCONVERT, NULL);
 
 	/* only allow rgb final data */
 	capsfilter = gst_element_factory_make("capsfilter", NULL);
-	caps = gst_caps_new_simple("video/x-raw-rgb", 
+	caps = gst_caps_new_simple(
+#if HAVE_GST_1
+			"video/x-raw",
+			"format", G_TYPE_STRING, "BGRx",
+#else
+                        "video/x-raw-rgb", 
 			"bpp", G_TYPE_INT, 32,
 			"depth", G_TYPE_INT, 32,
 			"endianness", G_TYPE_INT, G_BIG_ENDIAN,
@@ -219,6 +232,7 @@ static void _gst_egueb_document_image_decodebin2_pad_added_cb (
 			"red_mask", G_TYPE_INT, 0x0000ff00,
 			"green_mask", G_TYPE_INT, 0x00ff0000,
 			"blue_mask", G_TYPE_INT, 0xff000000,
+#endif
 			NULL);
 	g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
 
@@ -232,27 +246,27 @@ static void _gst_egueb_document_image_decodebin2_pad_added_cb (
 
 	/* start linking the elements */
 	gst_bin_add_many(GST_BIN(p->pipeline),
-			gst_object_ref(ffmpegcolorspace),
+			gst_object_ref(videoconvert),
 			gst_object_ref(capsfilter),
 			gst_object_ref(sink), NULL);
 
-	sinkpad = gst_element_get_static_pad(ffmpegcolorspace, "sink");
+	sinkpad = gst_element_get_static_pad(videoconvert, "sink");
 	linked = gst_pad_link(pad, sinkpad);
 	gst_object_unref(sinkpad);
 
 	if (linked != GST_PAD_LINK_OK) {
-		gst_bin_remove(GST_BIN(p->pipeline), ffmpegcolorspace);
+		gst_bin_remove(GST_BIN(p->pipeline), videoconvert);
 		gst_bin_remove(GST_BIN(p->pipeline), capsfilter);
 		gst_bin_remove(GST_BIN(p->pipeline), sink);
 
-		gst_element_set_state(ffmpegcolorspace, GST_STATE_NULL);
+		gst_element_set_state(videoconvert, GST_STATE_NULL);
 		gst_element_set_state(capsfilter, GST_STATE_NULL);
 		gst_element_set_state(sink, GST_STATE_NULL);
 		p->done = TRUE;
 		goto done;
 	}
 
-	srcpad = gst_element_get_static_pad(ffmpegcolorspace, "src");
+	srcpad = gst_element_get_static_pad(videoconvert, "src");
 	sinkpad = gst_element_get_static_pad(capsfilter, "sink");
 	gst_pad_link(srcpad, sinkpad);
 	gst_object_unref(sinkpad);
@@ -264,11 +278,11 @@ static void _gst_egueb_document_image_decodebin2_pad_added_cb (
 	gst_object_unref(sinkpad);
 	gst_object_unref(srcpad);
 
-	gst_element_sync_state_with_parent(ffmpegcolorspace);
+	gst_element_sync_state_with_parent(videoconvert);
 	gst_element_sync_state_with_parent(capsfilter);
 	gst_element_sync_state_with_parent(sink);
 done:
-	gst_object_unref(ffmpegcolorspace);
+	gst_object_unref(videoconvert);
 	gst_object_unref(capsfilter);
 	gst_object_unref(sink);
 }
@@ -339,6 +353,14 @@ static void _gst_egueb_document_image_appsrc_need_data_cb (
 
 	/* push the buffer and the end of stream at once */
 	g_signal_emit_by_name (src, "push-buffer", buf, &ret);
+}
+/*----------------------------------------------------------------------------*
+ *                               IO interface                                 *
+ *----------------------------------------------------------------------------*/
+static void _gst_egueb_document_feature_multimedia_video_cb(
+		Egueb_Dom_Event *ev, void *data)
+{
+	GST_ERROR ("Multimedia video provider called");
 }
 /*----------------------------------------------------------------------------*
  *                               IO interface                                 *
@@ -424,7 +446,7 @@ static void _gst_egueb_document_feature_io_image_cb(Egueb_Dom_Event *ev, void *d
 	Gst_Egueb_Document_Pipeline pipe;
 	GstElement *pipeline;
 	GstElement *appsrc;
-	GstElement *decodebin2;
+	GstElement *decodebin;
 	GstPad *srcpad;
 	GstPad *sinkpad;
 	Enesim_Stream *s;
@@ -448,25 +470,25 @@ static void _gst_egueb_document_feature_io_image_cb(Egueb_Dom_Event *ev, void *d
 			G_CALLBACK (_gst_egueb_document_image_appsrc_need_data_cb),
 			&pipe);
 	/* setup the decoder */
-	decodebin2 = gst_element_factory_make("decodebin2", NULL);
-	g_signal_connect(G_OBJECT (decodebin2), "pad-added",
-			G_CALLBACK (_gst_egueb_document_image_decodebin2_pad_added_cb),
+	decodebin = gst_element_factory_make(DECODEBIN, NULL);
+	g_signal_connect(G_OBJECT (decodebin), "pad-added",
+			G_CALLBACK (_gst_egueb_document_image_decodebin_pad_added_cb),
 			&pipe);
 
 	/* TODO */
-	/* check the decodebin2 signals that the element is for decoding */
-	/* check the decodebin2 caps of the pad added */
+	/* check the decodebin signals that the element is for decoding */
+	/* check the decodebin caps of the pad added */
 	/* those must start with an image/foo */
 
-	/* link the appsrc and the decodebin2 */
-	gst_bin_add_many(GST_BIN(pipeline), gst_object_ref(appsrc), gst_object_ref(decodebin2), NULL);
+	/* link the appsrc and the decodebin */
+	gst_bin_add_many(GST_BIN(pipeline), gst_object_ref(appsrc), gst_object_ref(decodebin), NULL);
 	srcpad = gst_element_get_static_pad(appsrc, "src");
-	sinkpad = gst_element_get_static_pad(decodebin2, "sink");
+	sinkpad = gst_element_get_static_pad(decodebin, "sink");
 	gst_pad_link(srcpad, sinkpad);
 	gst_object_unref(srcpad);
 	gst_object_unref(sinkpad);
 	gst_object_unref(appsrc);
-	gst_object_unref(decodebin2);
+	gst_object_unref(decodebin);
 
 	/* launch it */
 	gst_element_set_state(pipeline, GST_STATE_PLAYING);
@@ -488,6 +510,15 @@ static void _gst_egueb_document_feature_io_cleanup(Gst_Egueb_Document *thiz)
 	egueb_dom_node_event_listener_remove(thiz->topmost,
 			EGUEB_DOM_EVENT_IO_IMAGE,
 			_gst_egueb_document_feature_io_image_cb, EINA_TRUE, thiz);
+}
+
+static void _gst_egueb_document_feature_multimedia_cleanup(
+		Gst_Egueb_Document *thiz)
+{
+	egueb_dom_node_event_listener_remove(thiz->topmost,
+			EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
+			_gst_egueb_document_feature_multimedia_video_cb,
+			EINA_TRUE, thiz);
 }
 /*============================================================================*
  *                                 Global                                     *
@@ -513,6 +544,13 @@ void gst_egueb_document_free(Gst_Egueb_Document *thiz)
 		_gst_egueb_document_feature_io_cleanup(thiz);
 		egueb_dom_feature_unref(thiz->io);
 		thiz->io = NULL;
+	}
+
+	if (thiz->multimedia)
+	{
+		_gst_egueb_document_feature_multimedia_cleanup(thiz);
+		egueb_dom_feature_unref(thiz->multimedia);
+		thiz->multimedia = NULL;
 	}
 
 	if (thiz->topmost)
@@ -546,6 +584,23 @@ void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz)
 			_gst_egueb_document_feature_io_image_cb,
 			EINA_TRUE, thiz);
 	thiz->io = feature;
+}
+
+void gst_egueb_document_feature_multimedia_setup(Gst_Egueb_Document *thiz)
+{
+	Egueb_Dom_Feature *feature;
+
+	if (thiz->multimedia) return;
+
+	feature = egueb_dom_node_feature_get(thiz->topmost,
+			EGUEB_DOM_FEATURE_MULTIMEDIA_NAME, NULL);
+	if (!feature) return;
+
+	egueb_dom_node_event_listener_add(thiz->topmost,
+			EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
+			_gst_egueb_document_feature_multimedia_video_cb,
+			EINA_TRUE, thiz);
+	thiz->multimedia = feature;
 }
 /*============================================================================*
  *                                   API                                      *

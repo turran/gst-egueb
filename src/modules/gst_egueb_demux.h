@@ -97,7 +97,6 @@ struct _GstEguebDemux
   gboolean done;
 
   /* TODO remove this */
-  gint64 last_stop;
   /* TODO remove this */
   guint64 seek;
   guint64 next_ts;

@@ -16,8 +16,12 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _GST_EGUEB_PRIVATE_H_
-#define _GST_EGUEB_PRIVATE_H_
+#ifndef _GST_EGUEB_DOCUMENT_H_
+#define _GST_EGUEB_DOCUMENT_H_
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #include <Egueb_Dom.h>
 #include <gst/gst.h>
