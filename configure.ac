@@ -57,7 +57,7 @@ gst_egueb_bin_requirements_pc="gstreamer-0.10"
 
 gst_egueb_modules_requirements_cflags=""
 gst_egueb_modules_requirements_libs=""
-gst_egueb_modules_requirements_pc="egueb-dom egueb-smil enesim"
+gst_egueb_modules_requirements_pc="egueb-dom egueb-smil egueb-video enesim"
 
 gstreamer_api_default="0.10"
 AC_ARG_WITH(gstreamer-api,
