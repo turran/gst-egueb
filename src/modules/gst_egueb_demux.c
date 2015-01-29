@@ -26,6 +26,8 @@ static void
 gst_egueb_demux_src_loop (gpointer user_data);
 static void
 gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps);
+static gboolean
+gst_egueb_demux_src_set_caps (GstPad * pad, GstCaps * caps);
 
 G_DEFINE_TYPE (GstEguebDemux, gst_egueb_demux, GST_TYPE_ELEMENT);
 
@@ -192,7 +194,7 @@ gst_egueb_demux_damages_get_cb (Egueb_Dom_Feature *f EINA_UNUSED,
   GstEguebDemux * thiz = data;
   Eina_Rectangle *r;
 
-  GST_LOG_OBJECT (thiz, "Damage added at %d %d -> %d %d", area->x, area->y,
+  GST_INFO_OBJECT (thiz, "Damage added at %d %d -> %d %d", area->x, area->y,
       area->w, area->h);
   r = malloc (sizeof(Eina_Rectangle));
   *r = *area;
@@ -303,10 +305,7 @@ gst_egueb_demux_convert (GstEguebDemux * thiz, GstBuffer **buffer)
     gst_buffer_unmap (*buffer, &mi);
 #endif
   }
-
 }
-
-
 
 #if HAVE_GST_1
 static void
@@ -442,11 +441,13 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   caps = gst_pad_query_caps (pad, NULL);
   gst_caps_make_writable (caps);
   gst_egueb_demux_src_fixate_caps (pad, caps);
+  caps = gst_caps_fixate (caps);
 #else
   caps = gst_caps_copy (gst_pad_get_caps (pad));
   gst_pad_fixate_caps (pad, caps);
 #endif
   gst_pad_set_caps (pad, caps);
+  gst_caps_unref (caps);
 
   /* start pushing buffers */
   GST_INFO_OBJECT (thiz, "Starting streaming task");
@@ -459,9 +460,9 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   gst_object_unref (pad);
 
 no_window:
-  egueb_dom_feature_unref(render);
+  egueb_dom_feature_unref (render);
 no_render:
-  egueb_dom_node_unref(topmost);
+  egueb_dom_node_unref (topmost);
 no_topmost:
   egueb_dom_node_unref(doc);
 beach:
@@ -622,7 +623,7 @@ gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)
 
   thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
 
-  GST_DEBUG_OBJECT (thiz, "Fixating caps");
+  GST_DEBUG_OBJECT (thiz, "Fixating caps %" GST_PTR_FORMAT, caps);
   for (i = 0; i < gst_caps_get_size (caps); ++i) {
     structure = gst_caps_get_structure (caps, i);
 
@@ -636,6 +637,8 @@ gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)
     /* fixate the framerate in case nobody has set it */
     gst_structure_fixate_field_nearest_fraction (structure, "pixel-aspect-ratio", 1, 1);
   }
+
+  GST_DEBUG_OBJECT (thiz, "Fixed caps are %" GST_PTR_FORMAT, caps);
 
   gst_object_unref (thiz);
 }
@@ -700,7 +703,7 @@ gst_egueb_demux_src_set_caps (GstPad * pad, GstCaps * caps)
   gint height;
 
   thiz = GST_EGUEB_DEMUX (gst_pad_get_parent (pad));
-  GST_DEBUG_OBJECT (thiz, "Setting caps");
+  GST_DEBUG_OBJECT (thiz, "Setting caps %" GST_PTR_FORMAT, caps);
 
   width = thiz->w;
   height = thiz->h;
@@ -769,46 +772,85 @@ gst_egueb_demux_do_seek (GstBaseSrc *src, GstSegment *segment)
 
 #if HAVE_GST_1
 static gboolean
+gst_egueb_demux_set_allocation (GstEguebDemux * thiz,
+    GstBufferPool * pool, GstAllocator * allocator,
+    GstAllocationParams * params)
+{
+  GstAllocator *oldalloc;
+  GstBufferPool *oldpool;
+
+  oldpool = thiz->pool;
+  thiz->pool = pool;
+
+  oldalloc = thiz->allocator;
+  thiz->allocator = allocator;
+
+  if (params)
+    thiz->params = *params;
+  else
+    gst_allocation_params_init (&thiz->params);
+
+  if (oldpool) {
+    GST_DEBUG_OBJECT (thiz, "deactivating old pool %p", oldpool);
+    gst_buffer_pool_set_active (oldpool, FALSE);
+    gst_object_unref (oldpool);
+  }
+  if (oldalloc) {
+    gst_object_unref (oldalloc);
+  }
+  if (pool) {
+    GST_DEBUG_OBJECT (thiz, "activating new pool %p", pool);
+    gst_buffer_pool_set_active (pool, TRUE);
+  }
+  return TRUE;
+}
+
+static gboolean
 gst_egueb_demux_decide_allocation (GstEguebDemux * thiz, GstQuery * query)
 {
   GstBufferPool *pool;
+  GstAllocator *allocator;
+  GstAllocationParams params;
   GstStructure *config;
   GstCaps *caps = NULL;
   gulong buffer_size;
   guint size, min, max;
 
   buffer_size = gst_egueb_demux_get_size (thiz);
-  if (gst_query_get_n_allocation_pools (query) > 0) {
-    gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
-    /* adjust size */
-    size = MAX (size, buffer_size);
+  gst_query_parse_allocation (query, &caps, NULL);
+
+  if (gst_query_get_n_allocation_params (query) > 0) {
+    gst_query_parse_nth_allocation_param (query, 0, &allocator, &params);
   } else {
-    /* no downstream pool, make our own */
-    pool = gst_video_buffer_pool_new ();
-    size = buffer_size;
-    min = max = 0;
+    allocator = NULL;
+    gst_allocation_params_init (&params);
   }
 
-  if (pool == thiz->pool) {
-    gst_object_unref (pool);
-    return TRUE;
+  if (gst_query_get_n_allocation_pools (query) > 0) {
+    gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
+    size = MAX (buffer_size, size);
+  } else {
+    pool = NULL;
+    size = buffer_size;
+    min = 0;
+    max = 0;
+  }
+
+  if (pool == NULL) {
+    /* no pool, we can make our own */
+    GST_DEBUG_OBJECT (thiz, "no pool, making new pool");
+    pool = gst_video_buffer_pool_new ();
   }
 
   /* now configure */
-  gst_query_parse_allocation (query, &caps, NULL);
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, size, min, max);
+  gst_buffer_pool_config_set_allocator (config, allocator, &params);
+  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
   gst_buffer_pool_set_config (pool, config);
 
-  if (thiz->pool) {
-    gst_buffer_pool_set_active (pool, FALSE);
-    gst_object_unref (thiz->pool);
-  }
-
-  thiz->pool = pool;
-  gst_buffer_pool_set_active (pool, TRUE);
-
-  return TRUE;
+  /* now store */
+  return gst_egueb_demux_set_allocation (thiz, pool, allocator, &params);
 }
 
 static gboolean
@@ -834,7 +876,11 @@ gst_egueb_demux_src_negotiate_caps (GstPad * pad)
   if (caps && !gst_caps_is_empty (caps)) {
     /* fixate the caps and try to set it */
     gst_egueb_demux_src_fixate_caps (pad, caps);
+    caps = gst_caps_fixate (caps);
+    GST_DEBUG_OBJECT (thiz, "Negotiated caps %" GST_PTR_FORMAT, caps);
     ret = gst_egueb_demux_src_set_caps (pad, caps);
+    gst_pad_set_caps (pad, caps);
+    gst_caps_unref (caps);
   } else {
     if (caps)
       gst_caps_unref (caps);
@@ -1024,7 +1070,6 @@ gst_egueb_demux_src_loop (gpointer user_data)
   }
 
   gst_egueb_demux_draw (thiz);
-
   gst_egueb_demux_convert (thiz, &buf);
   GST_DEBUG_OBJECT (thiz, "Sending buffer with ts: %" GST_TIME_FORMAT,
       GST_TIME_ARGS (thiz->next_ts));
@@ -1169,6 +1214,7 @@ gst_egueb_demux_src_query (GstPad * pad, GstObject * obj,
         caps = gst_egueb_demux_src_get_caps (pad);
         /* TODO handle the filter */
         gst_query_set_caps_result (query, caps);
+        gst_caps_unref (caps);
         ret = TRUE;
       }
       break;

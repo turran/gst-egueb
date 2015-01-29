@@ -79,6 +79,8 @@ struct _GstEguebDemux
   guint h;
 #if HAVE_GST_1
   GstBufferPool *pool;
+  GstAllocator * allocator;
+  GstAllocationParams params;
 #endif
 
   /* Animation feature */
