@@ -29,7 +29,9 @@
 #endif
 
 #include "gst_egueb_document.h"
+#if HAVE_GST_0
 #include "Egueb_Video.h"
+#endif
 
 GST_DEBUG_CATEGORY_EXTERN (gst_egueb_document_debug);
 #define GST_CAT_DEFAULT gst_egueb_document_debug
@@ -361,6 +363,7 @@ static void _gst_egueb_document_image_appsrc_need_data_cb (
 static void _gst_egueb_document_feature_multimedia_video_cb(
 		Egueb_Dom_Event *ev, void *data)
 {
+#if HAVE_GST_0
 	Egueb_Dom_Video_Provider *vp = NULL;
 	Egueb_Dom_Node *n;
 	Enesim_Renderer *r;
@@ -371,6 +374,7 @@ static void _gst_egueb_document_feature_multimedia_video_cb(
 	vp = egueb_video_provider_new(NULL, r, n);
 	egueb_dom_event_multimedia_video_provider_set(ev, vp);
 	egueb_dom_node_unref(n);
+#endif
 }
 /*----------------------------------------------------------------------------*
  *                               IO interface                                 *

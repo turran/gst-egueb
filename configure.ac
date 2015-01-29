@@ -57,7 +57,7 @@ gst_egueb_bin_requirements_pc="gstreamer-0.10"
 
 gst_egueb_modules_requirements_cflags=""
 gst_egueb_modules_requirements_libs=""
-gst_egueb_modules_requirements_pc="egueb-dom egueb-smil egueb-video enesim"
+gst_egueb_modules_requirements_pc="egueb-dom egueb-smil enesim"
 
 gstreamer_api_default="0.10"
 AC_ARG_WITH(gstreamer-api,
@@ -75,7 +75,7 @@ case "$gstreamer_api" in
   AC_DEFINE_UNQUOTED(HAVE_GST_1, [1], [Use GStreamer 1.0])
   ;;
   0.10)
-  gst_egueb_modules_requirements_pc+=" gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10"
+  gst_egueb_modules_requirements_pc+=" gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-video"
   AC_DEFINE_UNQUOTED(HAVE_GST_0, [1], [Use GStreamer 0.10])
   ;;
   *)
