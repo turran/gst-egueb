@@ -499,7 +499,9 @@ gst_egueb_demux_set_allocation (GstEguebDemux * thiz,
 static void
 gst_egueb_demux_cleanup (GstEguebDemux * thiz)
 {
+#if HAVE_GST_1
   gst_egueb_demux_set_allocation (thiz, NULL, NULL, NULL);
+#endif
 
   if (thiz->input) {
     egueb_dom_input_unref(thiz->input);
@@ -951,7 +953,12 @@ gst_egueb_demux_src_loop (gpointer user_data)
 
       thiz->segment->duration = new_duration;
       g_mutex_unlock (thiz->doc_lock);
+#if HAVE_GST_1
       msg = gst_message_new_duration_changed (GST_OBJECT (thiz));
+#else
+      msg = gst_message_new_duration (GST_OBJECT (thiz), GST_FORMAT_TIME,
+          new_duration);
+#endif
       gst_element_post_message (GST_ELEMENT (thiz), msg);
       g_mutex_lock (thiz->doc_lock);
     }
