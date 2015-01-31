@@ -222,7 +222,9 @@ gst_egueb_demux_damages_get_cb (Egueb_Dom_Feature *f EINA_UNUSED,
 static Eina_Bool
 gst_egueb_demux_draw (GstEguebDemux * thiz)
 {
+  Enesim_Log *log = NULL;
   Eina_Rectangle *r;
+  Eina_Bool ret;
 
   /* draw with the document locked */
   g_mutex_lock (thiz->doc_lock);
@@ -239,14 +241,22 @@ gst_egueb_demux_draw (GstEguebDemux * thiz)
   if (enesim_renderer_background_color_get (thiz->background) != 0) {
     enesim_renderer_draw_list(thiz->background, thiz->s, ENESIM_ROP_FILL,
         thiz->damages, 0, 0, NULL);
-    egueb_dom_feature_render_draw_list(thiz->render, thiz->s, ENESIM_ROP_BLEND,
-        thiz->damages, 0, 0, NULL);
+    ret = egueb_dom_feature_render_draw_list(thiz->render, thiz->s, ENESIM_ROP_BLEND,
+        thiz->damages, 0, 0, &log);
   } else {
-    egueb_dom_feature_render_draw_list(thiz->render, thiz->s, ENESIM_ROP_FILL,
-        thiz->damages, 0, 0, NULL);
+    ret = egueb_dom_feature_render_draw_list(thiz->render, thiz->s, ENESIM_ROP_FILL,
+        thiz->damages, 0, 0, &log);
   }
 
   g_mutex_unlock (thiz->doc_lock);
+
+  if (!ret) {
+    enesim_log_dump (log);
+    if (log) {
+      enesim_log_delete (log);
+    }
+  }
+
 
   EINA_LIST_FREE (thiz->damages, r)
     free(r);
@@ -657,6 +667,7 @@ gst_egueb_demux_src_get_caps (GstPad * pad)
 
   caps = gst_caps_copy (gst_pad_get_pad_template_caps (pad));
 
+  g_mutex_lock (thiz->doc_lock);
   if (!thiz->doc) {
     GST_DEBUG_OBJECT (thiz, "Using template caps");
     goto beach;
@@ -671,8 +682,18 @@ gst_egueb_demux_src_get_caps (GstPad * pad)
     GST_ERROR_OBJECT (thiz, "Not supported yet");
     goto beach;
   } else {
+    int old_cw, old_ch;
+
+    /* FIXME setting the content leads to an undefined behaviour if a set_caps
+     * does not come after this one
+     */
+    egueb_dom_feature_window_content_size_get(thiz->window, &old_cw, &old_ch);
+
     egueb_dom_feature_window_content_size_set(thiz->window, 0, 0);
     egueb_dom_feature_window_content_size_get(thiz->window, &cw, &ch);
+
+    /* restore */
+    egueb_dom_feature_window_content_size_set(thiz->window, old_cw, old_ch);
   }
 
   for (i = 0; i < gst_caps_get_size (caps); i++) {
@@ -686,6 +707,7 @@ gst_egueb_demux_src_get_caps (GstPad * pad)
   }
 
 beach:
+  g_mutex_unlock (thiz->doc_lock);
   GST_DEBUG_OBJECT (thiz, "Returning caps %" GST_PTR_FORMAT, caps);
   gst_object_unref (thiz);
 
