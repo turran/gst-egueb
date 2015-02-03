@@ -4,7 +4,6 @@
 
 #include <gst/gst.h>
 #include "gst_egueb_demux.h"
-#include "gst_egueb_type.h"
 
 #if HAVE_GST_1
 #define PLUGIN_NAME egueb

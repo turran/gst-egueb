@@ -29,7 +29,6 @@
 #endif
 
 #include "gst_egueb_demux.h"
-#include "gst_egueb_type.h"
 
 GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
 #define GST_CAT_DEFAULT gst_egueb_demux_debug
@@ -47,16 +46,6 @@ static gboolean
 gst_egueb_demux_src_set_caps (GstPad * pad, GstCaps * caps);
 
 G_DEFINE_TYPE (GstEguebDemux, gst_egueb_demux, GST_TYPE_ELEMENT);
-
-/* Later, whenever egueb supports more than svg, we can
- * add more templates here
- */
-static GstStaticPadTemplate gst_egueb_demux_sink_factory =
-GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (SVG_MIME)
-    );
 
 static GstStaticPadTemplate gst_egueb_demux_src_factory =
 GST_STATIC_PAD_TEMPLATE ("src",
@@ -90,6 +79,32 @@ enum
   PROP_URI,
   /* FILL ME */
 };
+
+/* Add the templates based on the implementation mime */
+static GstPadTemplate *
+gst_egueb_demux_get_sink_template (void)
+{
+  Egueb_Dom_List *mimes;
+  Egueb_Dom_String *mime;
+  Eina_Iterator *it;
+  GstCaps *caps;
+
+  mimes = egueb_dom_registry_mime_get ();
+  it = egueb_dom_list_iterator_new (mimes);
+  caps = gst_caps_new_empty ();
+  EINA_ITERATOR_FOREACH (it, mime) {
+    GstCaps *cap;
+
+    cap = gst_caps_from_string (egueb_dom_string_string_get(mime));
+    gst_caps_append (caps, cap);
+  }
+
+  eina_iterator_free (it);
+  egueb_dom_list_unref (mimes);
+
+  /* get every mime type and create a cap based on it */
+  return gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, caps);
+}
 
 static gchar *
 gst_egueb_demux_location_get (GstPad * pad)
@@ -1497,14 +1512,14 @@ gst_egueb_demux_dispose (GObject * object)
 static void
 gst_egueb_demux_init (GstEguebDemux * thiz)
 {
+  GstEguebDemuxClass *klass;
   GstPad *pad;
 
-  egueb_dom_init ();
-  egueb_smil_init ();
-
   /* Create the pads */
-  pad = gst_pad_new_from_static_template (&gst_egueb_demux_sink_factory,
-      "sink");
+  klass = GST_EGUEB_DEMUX_GET_CLASS (thiz);
+  pad = gst_pad_new_from_template (gst_element_class_get_pad_template
+      (GST_ELEMENT_CLASS (klass), "sink"), "sink");
+
 #if HAVE_GST_1
   gst_pad_set_event_function (GST_PAD (pad),
       GST_DEBUG_FUNCPTR (gst_egueb_demux_sink_event));
@@ -1560,6 +1575,10 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+  GstPadTemplate *sink_template;
+
+  egueb_dom_init ();
+  egueb_smil_init ();
 
   gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_egueb_demux_dispose);
   gobject_class->set_property =
@@ -1591,9 +1610,8 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
           0, G_PARAM_READWRITE));
 
   /* initialize the element class */
-  /* TODO add the templates based on the implementation mime */
-  gst_element_class_add_pad_template (element_class,
-      gst_static_pad_template_get (&gst_egueb_demux_sink_factory));
+  sink_template = gst_egueb_demux_get_sink_template ();
+  gst_element_class_add_pad_template (element_class, sink_template);
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_egueb_demux_src_factory));
 
