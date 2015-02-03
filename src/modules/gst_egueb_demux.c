@@ -80,6 +80,13 @@ GST_STATIC_PAD_TEMPLATE ("video",
         "height = (int) [ 1, MAX ]")
     );
 
+static GstStaticPadTemplate gst_egueb_demux_other_factory =
+GST_STATIC_PAD_TEMPLATE ("src_%u",
+    GST_PAD_SRC,
+    GST_PAD_SOMETIMES,
+    GST_STATIC_CAPS_ANY);
+
+
 enum
 {
   PROP_0,
@@ -684,7 +691,7 @@ gst_egueb_demux_start (GstEguebDemux * thiz)
   GstEvent *event;
   gchar *stream_id;
 
-  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "video");
   stream_id =
       gst_pad_create_stream_id (pad, GST_ELEMENT_CAST (thiz), NULL);
   GST_DEBUG_OBJECT (thiz, "Sending STREAM START with id '%s'", stream_id);
@@ -805,7 +812,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   ret = TRUE;
 
   /* set the caps, and start running */
-  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "video");
 #if HAVE_GST_1
   /* send the start stream */
   gst_egueb_demux_start (thiz);
@@ -1329,7 +1336,7 @@ gst_egueb_demux_video_loop (gpointer user_data)
   gint fps;
 
   thiz = GST_EGUEB_DEMUX (user_data);
-  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "src");
+  pad = gst_element_get_static_pad (GST_ELEMENT (thiz), "video");
 
   GST_DEBUG_OBJECT (thiz, "Creating buffer at %" GST_TIME_FORMAT,
       GST_TIME_ARGS (thiz->next_ts));
@@ -1896,7 +1903,7 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
   gst_element_add_pad (GST_ELEMENT (thiz), pad);
 
   pad = gst_pad_new_from_static_template (&gst_egueb_demux_video_factory,
-      "src");
+      "video");
 #if HAVE_GST_1
   gst_pad_set_event_function (pad,
       GST_DEBUG_FUNCPTR (gst_egueb_demux_video_event));
@@ -1976,6 +1983,8 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
   gst_element_class_add_pad_template (element_class, sink_template);
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_egueb_demux_video_factory));
+  gst_element_class_add_pad_template (element_class,
+      gst_static_pad_template_get (&gst_egueb_demux_other_factory));
 
   gst_element_class_set_details_simple (element_class,
       "Egueb SVG Parser/Demuxer/Decoder",
