@@ -219,6 +219,26 @@ gst_egueb_demux_video_appsink_buffer_cb (GstAppSink * sink, gpointer user_data)
   return GST_FLOW_OK;
 }
 
+#if HAVE_GST_1
+static GstPadProbeReturn
+gst_egueb_demux_video_pad_probe_cb (GstPad * pad,
+    GstPadProbeInfo *info, gpointer user_data)
+{
+  GstEguebDemux *demux = GST_EGUEB_DEMUX (user_data);
+
+  if (info->type & GST_PAD_PROBE_TYPE_BUFFER) {
+    GST_ERROR ("buffer on %s", GST_PAD_NAME (pad));
+  } else if (info->type & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM) {
+    GST_ERROR ("event %s downstream on %s", GST_PAD_NAME (pad),
+      GST_EVENT_TYPE_NAME (GST_PAD_PROBE_INFO_EVENT (info)));
+  } else {
+    GST_ERROR ("something else %d", info->type);
+  }
+
+  return GST_PAD_PROBE_OK;
+}
+#endif
+
 static void
 gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
     GstPad * pad, GstEguebDemuxVideoProvider * thiz)
@@ -281,17 +301,16 @@ gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
   } else {
     GstPad  *gpad;
     GstEvent *event;
-    gchar *stream_id;
 
     GST_INFO_OBJECT (parent, "Exposing pad with caps %" GST_PTR_FORMAT, caps);
     gpad = gst_ghost_pad_new (NULL, pad);
+#if HAVE_GST_1
+    gst_pad_add_probe (gpad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM |
+        GST_PAD_PROBE_TYPE_DATA_UPSTREAM, gst_egueb_demux_video_pad_probe_cb,
+        parent, NULL);
+#endif
     gst_pad_set_active (gpad, TRUE);
     gst_element_add_pad (parent, gpad);
-    stream_id =
-      gst_pad_create_stream_id (gpad, parent, NULL);
-    GST_DEBUG_OBJECT (parent, "Sending STREAM START with id '%s'", stream_id);
-    gst_pad_push_event (gpad, gst_event_new_stream_start (stream_id));
-    g_free (stream_id);
   }
 
   gst_object_unref (parent);
