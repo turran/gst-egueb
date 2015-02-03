@@ -24,6 +24,15 @@
  * the buffers
  */
 
+/* TODO
+ * For the multimedia feature we need to:
+ * - Every (new)segment that travels on the pads must be synchronized
+ *   with the actual segment
+ * - What to do with the stream start events?
+ * - We need to not forward seek events from a ghostpad into the decodebin
+ *   branch
+ */
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
