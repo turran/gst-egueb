@@ -29,6 +29,7 @@
 #endif
 
 #include "gst_egueb_demux.h"
+#include <gst/app/gstappsink.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
 #define GST_CAT_DEFAULT gst_egueb_demux_debug
@@ -39,16 +40,16 @@ GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
 
 /* Forward declarations */
 static void
-gst_egueb_demux_src_loop (gpointer user_data);
+gst_egueb_demux_video_loop (gpointer user_data);
 static void
-gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps);
+gst_egueb_demux_video_fixate_caps (GstPad * pad, GstCaps * caps);
 static gboolean
-gst_egueb_demux_src_set_caps (GstPad * pad, GstCaps * caps);
+gst_egueb_demux_video_set_caps (GstPad * pad, GstCaps * caps);
 
-G_DEFINE_TYPE (GstEguebDemux, gst_egueb_demux, GST_TYPE_ELEMENT);
+G_DEFINE_TYPE (GstEguebDemux, gst_egueb_demux, GST_TYPE_BIN);
 
-static GstStaticPadTemplate gst_egueb_demux_src_factory =
-GST_STATIC_PAD_TEMPLATE ("src",
+static GstStaticPadTemplate gst_egueb_demux_video_factory =
+GST_STATIC_PAD_TEMPLATE ("video",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (
@@ -79,6 +80,351 @@ enum
   PROP_URI,
   /* FILL ME */
 };
+
+/*----------------------------------------------------------------------------*
+ *                              Video surface                                 *
+ *----------------------------------------------------------------------------*/
+typedef struct _GstEguebDemuxVideoSurface
+{
+  GstBuffer *buffer;
+#if HAVE_GST_1
+  GstMapInfo mi;
+#endif
+} GstEguebDemuxVideoSurface;
+
+static void
+gst_egueb_demux_video_surface_free (void * data, void * user_data)
+{
+  GstEguebDemuxVideoSurface * thiz = user_data;
+
+#if HAVE_GST_1
+  gst_buffer_unmap (thiz->buffer, &thiz->mi);
+#endif
+  gst_buffer_unref (thiz->buffer);
+  g_free (thiz);
+}
+/*----------------------------------------------------------------------------*
+ *                             Video provider                                 *
+ *----------------------------------------------------------------------------*/
+typedef struct _GstEguebDemuxVideoProvider
+{
+  Enesim_Renderer *image;
+  GstElement *bin;
+  GstElement *uridecodebin;
+  GstElement *appsink;
+} GstEguebDemuxVideoProvider;
+
+static void
+gst_egueb_demux_video_appsink_show (GstEguebDemuxVideoProvider * thiz,
+    GstBuffer * buffer, GstCaps * caps)
+{
+  GstEguebDemuxVideoSurface *vsurface;
+  GstStructure *s;
+  Enesim_Surface *surface;
+  guint8 * data;
+  gint width;
+  gint height;
+  gint stride;
+
+  GST_INFO ("Buffer received");
+
+  s = gst_caps_get_structure (caps, 0);
+  /* get the width and height */
+  gst_structure_get_int (s, "width", &width);
+  gst_structure_get_int (s, "height", &height);
+  gst_caps_unref (caps);
+
+  vsurface = g_new0 (GstEguebDemuxVideoSurface, 1);
+  vsurface->buffer = buffer;
+
+#if HAVE_GST_1
+  gst_buffer_map (vsurface->buffer, &vsurface->mi, GST_MAP_READ);
+  data = vsurface->mi.data; 
+  stride = GST_ROUND_UP_4 (width * 4);
+#else
+  data = GST_BUFFER_DATA (vsurface->buffer);
+  stride = GST_ROUND_UP_4 (width * 4);
+#endif
+  surface = enesim_surface_new_data_from (ENESIM_FORMAT_ARGB8888,
+      width, height, EINA_FALSE, data, stride,
+      gst_egueb_demux_video_surface_free, vsurface);
+
+  /* lock the renderer */
+  enesim_renderer_lock (thiz->image);
+  /* set the new surface */
+  enesim_renderer_image_source_surface_set (thiz->image, surface);
+  /* unlock the renderer */
+  enesim_renderer_unlock (thiz->image);
+}
+
+static GstFlowReturn
+gst_egueb_demux_video_appsink_preroll_cb (GstAppSink * sink, gpointer user_data)
+{
+  GstEguebDemuxVideoProvider *thiz = user_data;
+#if HAVE_GST_1
+  GstSample *sample;
+#endif
+  GstBuffer *buffer;
+  GstCaps *caps;
+
+#if HAVE_GST_1
+  sample =  gst_app_sink_pull_preroll (sink);
+  buffer = gst_sample_get_buffer (sample);
+  caps = gst_sample_get_caps (sample);
+#else
+  buffer = gst_app_sink_pull_preroll (sink);
+  caps = gst_buffer_get_caps (buffer);
+#endif
+
+  gst_egueb_demux_video_appsink_show (thiz, buffer, caps);
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gst_egueb_demux_video_appsink_buffer_cb (GstAppSink * sink, gpointer user_data)
+{
+  GstEguebDemuxVideoProvider *thiz = user_data;
+#if HAVE_GST_1
+  GstSample *sample;
+#endif
+  GstBuffer *buffer;
+  GstCaps *caps;
+
+#if HAVE_GST_1
+  sample =  gst_app_sink_pull_sample (sink);
+  buffer = gst_sample_get_buffer (sample);
+  caps = gst_sample_get_caps (sample);
+#else
+  buffer = gst_app_sink_pull_preroll (sink);
+  caps = gst_buffer_get_caps (buffer);
+#endif
+
+  gst_egueb_demux_video_appsink_show (thiz, buffer, caps);
+  return GST_FLOW_OK;
+}
+
+static void
+gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
+    GstPad * pad, GstEguebDemuxVideoProvider * thiz)
+{
+  GstElement *parent;
+  GstCaps *caps;
+  GstStructure *s;
+  const gchar *name;
+
+  /* create the videoconvert ! appsink or ffmpegcolorspace ! appsink
+   * for video based caps, otherwise expose the pad
+   */
+#if GST_CHECK_VERSION (1,0,0)
+  caps = gst_pad_query_caps (pad, NULL);
+#else
+  caps = gst_pad_get_caps_reffed (pad);
+#endif
+
+  parent = GST_ELEMENT (gst_object_get_parent (GST_OBJECT (thiz->bin)));
+
+  s = gst_caps_get_structure (caps, 0);
+  name = gst_structure_get_name (s);
+  if (!strncmp (name, "video/", 6)) {
+    GstElement *conv, *sink;
+    GstPad *sinkpad;
+    GstCaps *appsinkcaps;
+    GstAppSinkCallbacks callbacks = { 
+      NULL,
+      gst_egueb_demux_video_appsink_preroll_cb,
+      gst_egueb_demux_video_appsink_buffer_cb,
+    };
+
+    GST_INFO_OBJECT (parent, "Creating video pipeline for caps %" GST_PTR_FORMAT, caps);
+#if GST_CHECK_VERSION (1,0,0)
+    conv = gst_element_factory_make ("videoconvert", NULL);
+#else
+    conv = gst_element_factory_make ("ffmpegcolorspace", NULL);
+#endif
+    sink = gst_element_factory_make ("appsink", NULL);
+    gst_app_sink_set_callbacks (GST_APP_SINK (sink), &callbacks, thiz, NULL);
+    appsinkcaps =  gst_caps_new_simple (
+#if HAVE_GST_1
+        "video/x-raw",
+        "format", G_TYPE_STRING, "BGRx",
+#else
+        "depth", G_TYPE_INT, 24, "bpp", G_TYPE_INT, 32,
+        "endianness", G_TYPE_INT, G_BIG_ENDIAN,
+        "red_mask", G_TYPE_INT, 0x0000ff00,
+        "green_mask", G_TYPE_INT, 0x00ff0000,
+        "blue_mask", G_TYPE_INT, 0xff000000,
+#endif
+        NULL);
+    gst_app_sink_set_caps (GST_APP_SINK (sink), appsinkcaps);
+    gst_caps_unref (appsinkcaps);
+
+    gst_bin_add_many (GST_BIN (thiz->bin), conv, sink, NULL);
+    gst_element_link (conv, sink);
+    sinkpad = gst_element_get_static_pad (conv, "sink");
+    gst_pad_link (pad, sinkpad);
+  } else {
+    GstPad  *gpad;
+    GstEvent *event;
+    gchar *stream_id;
+
+    GST_INFO_OBJECT (parent, "Exposing pad with caps %" GST_PTR_FORMAT, caps);
+    gpad = gst_ghost_pad_new (NULL, pad);
+    gst_pad_set_active (gpad, TRUE);
+    gst_element_add_pad (parent, gpad);
+    stream_id =
+      gst_pad_create_stream_id (gpad, parent, NULL);
+    GST_DEBUG_OBJECT (parent, "Sending STREAM START with id '%s'", stream_id);
+    gst_pad_push_event (gpad, gst_event_new_stream_start (stream_id));
+    g_free (stream_id);
+  }
+
+  gst_object_unref (parent);
+}
+
+static void *
+gst_egueb_demux_video_provider_descriptor_create (void)
+{
+  GstEguebDemuxVideoProvider *thiz;
+  GstElement *uridecodebin;
+
+  thiz = g_new0 (GstEguebDemuxVideoProvider, 1);
+  thiz->bin = gst_bin_new (NULL);
+
+  thiz->uridecodebin = gst_element_factory_make ("uridecodebin", NULL);
+  g_signal_connect (G_OBJECT (thiz->uridecodebin), "pad-added",
+      G_CALLBACK (gst_egueb_demux_video_uridecodebin_pad_added_cb), thiz);
+  gst_bin_add (GST_BIN (thiz->bin), thiz->uridecodebin);
+  
+  return thiz;
+}
+
+static void
+gst_egueb_demux_video_provider_descriptor_destroy (void * data)
+{
+  GstEguebDemuxVideoProvider *thiz = data;
+
+  GST_ERROR ("Destroying");
+
+  /* TODO remove the element from the bin */
+  //gst_element_set_state(thiz->playbin, GST_STATE_NULL);
+  //gst_object_unref(thiz->playbin);
+
+  if (thiz->image)
+  {
+    enesim_renderer_unref (thiz->image);
+    thiz->image = NULL;
+  }
+
+  g_free (thiz);
+}
+
+static void
+gst_egueb_demux_video_provider_descriptor_open (void * data,
+    Egueb_Dom_String * uri)
+{
+  GstEguebDemuxVideoProvider *thiz = data;
+
+  GST_ERROR ("Open");
+  /* the uri that comes from the api must be absolute */
+  //gst_element_set_state(thiz->playbin, GST_STATE_READY);
+  g_object_set(thiz->uridecodebin, "uri", egueb_dom_string_string_get(uri),
+      NULL);
+}
+
+static void
+gst_egueb_demux_video_provider_descriptor_close (void * data)
+{
+  GstEguebDemuxVideoProvider *thiz = data;
+
+  GST_ERROR ("Close");
+}
+
+static void gst_egueb_demux_video_provider_descriptor_play(void * data)
+{
+  GstEguebDemuxVideoProvider *thiz = data;
+
+  GST_ERROR ("Play");
+}
+
+static void gst_egueb_demux_video_provider_descriptor_pause(void * data)
+{
+  GstEguebDemuxVideoProvider *thiz = data;
+
+  GST_ERROR ("Pause");
+}
+
+static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
+  /* .version = */ EGUEB_DOM_VIDEO_PROVIDER_DESCRIPTOR_VERSION,
+  /* .create  = */ gst_egueb_demux_video_provider_descriptor_create,
+  /* .destroy = */ gst_egueb_demux_video_provider_descriptor_destroy,
+  /* .open    = */ gst_egueb_demux_video_provider_descriptor_open,
+  /* .close   = */ gst_egueb_demux_video_provider_descriptor_close,
+  /* .play    = */ gst_egueb_demux_video_provider_descriptor_play,
+  /* .pause   = */ gst_egueb_demux_video_provider_descriptor_pause
+};
+
+/*----------------------------------------------------------------------------*
+ *                           Multimedia interface                             *
+ *----------------------------------------------------------------------------*/
+static void 
+gst_egueb_demux_multimedia_video_cb(
+		Egueb_Dom_Event *ev, void *data)
+{
+  GstEguebDemux *thiz;
+  GstEguebDemuxVideoProvider *dvp;
+  Egueb_Dom_Video_Provider *vp = NULL;
+  Egueb_Dom_Node *n;
+  Enesim_Renderer *r;
+  const Egueb_Dom_Video_Provider_Notifier *notifier = NULL;
+
+  thiz = GST_EGUEB_DEMUX (data);
+  GST_ERROR_OBJECT (thiz, "Multimedia event received");
+
+  n = egueb_dom_event_target_get (ev);
+  r = egueb_dom_event_multimedia_video_renderer_get (ev);
+
+  /* create our video provider */
+  vp = egueb_dom_video_provider_new (&gst_egueb_demux_video_provider,
+      notifier, enesim_renderer_ref (r), n);
+  dvp = egueb_dom_video_provider_data_get (vp);
+  dvp->image = r;
+
+  /* add the video pipeline to our own bin */
+  gst_bin_add (GST_BIN (thiz), dvp->bin);
+
+  /* finally set the video provider on the event */
+  egueb_dom_event_multimedia_video_provider_set (ev, vp);
+  egueb_dom_node_unref (n);
+}
+
+static void
+gst_egueb_demux_multimedia_setup (GstEguebDemux * thiz)
+{
+  Egueb_Dom_Feature *feature;
+
+  if (thiz->multimedia) return;
+
+  feature = egueb_dom_node_feature_get (thiz->topmost,
+      EGUEB_DOM_FEATURE_MULTIMEDIA_NAME, NULL);
+  if (!feature) return;
+
+  egueb_dom_node_event_listener_add (thiz->topmost,
+  EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
+      gst_egueb_demux_multimedia_video_cb, EINA_TRUE, thiz);
+  thiz->multimedia = feature;
+}
+
+static void
+gst_egueb_demux_multimedia_cleanup (GstEguebDemux * thiz)
+{
+  if (thiz->multimedia) {
+    egueb_dom_node_event_listener_remove(thiz->topmost,
+        EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
+        gst_egueb_demux_multimedia_video_cb, EINA_TRUE, thiz);
+    egueb_dom_feature_unref (thiz->multimedia);
+    thiz->multimedia = NULL;
+  }
+}
 
 /* Add the templates based on the implementation mime */
 static GstPadTemplate *
@@ -442,10 +788,11 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   thiz->animation = egueb_dom_node_feature_get(thiz->topmost,
       EGUEB_SMIL_FEATURE_ANIMATION_NAME, NULL);
 
+  gst_egueb_demux_multimedia_setup (thiz);
+
   /* setup our own gst egueb document */
   thiz->gdoc = gst_egueb_document_new (egueb_dom_node_ref(thiz->doc));
   gst_egueb_document_feature_io_setup (thiz->gdoc);
-  gst_egueb_document_feature_multimedia_setup (thiz->gdoc);
   ret = TRUE;
 
   /* set the caps, and start running */
@@ -455,7 +802,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   gst_egueb_demux_start (thiz);
   caps = gst_pad_query_caps (pad, NULL);
   gst_caps_make_writable (caps);
-  gst_egueb_demux_src_fixate_caps (pad, caps);
+  gst_egueb_demux_video_fixate_caps (pad, caps);
   caps = gst_caps_fixate (caps);
 #else
   caps = gst_caps_copy (gst_pad_get_caps (pad));
@@ -468,9 +815,9 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   GST_INFO_OBJECT (thiz, "Starting streaming task");
   /* TODO pass the pad itself */
 #if HAVE_GST_1
-  gst_pad_start_task (pad, gst_egueb_demux_src_loop, thiz, NULL);
+  gst_pad_start_task (pad, gst_egueb_demux_video_loop, thiz, NULL);
 #else
-  gst_pad_start_task (pad, gst_egueb_demux_src_loop, thiz);
+  gst_pad_start_task (pad, gst_egueb_demux_video_loop, thiz);
 #endif
   gst_object_unref (pad);
 
@@ -533,6 +880,8 @@ gst_egueb_demux_cleanup (GstEguebDemux * thiz)
 #if HAVE_GST_1
   gst_egueb_demux_set_allocation (thiz, NULL, NULL, NULL);
 #endif
+
+  gst_egueb_demux_multimedia_cleanup (thiz);
 
   if (thiz->input) {
     egueb_dom_input_unref(thiz->input);
@@ -645,7 +994,7 @@ gst_egueb_demux_sink_chain (GstPad * pad, GstObject * obj, GstBuffer * buffer)
 }
 
 static void
-gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)
+gst_egueb_demux_video_fixate_caps (GstPad * pad, GstCaps * caps)
 {
   GstEguebDemux *thiz;
   GstStructure *structure;
@@ -674,7 +1023,7 @@ gst_egueb_demux_src_fixate_caps (GstPad * pad, GstCaps * caps)
 }
 
 static GstCaps *
-gst_egueb_demux_src_get_caps (GstPad * pad)
+gst_egueb_demux_video_get_caps (GstPad * pad)
 {
   GstEguebDemux *thiz;
   GstCaps *caps;
@@ -736,7 +1085,7 @@ beach:
 }
 
 static gboolean
-gst_egueb_demux_src_set_caps (GstPad * pad, GstCaps * caps)
+gst_egueb_demux_video_set_caps (GstPad * pad, GstCaps * caps)
 {
   GstEguebDemux * thiz;
   GstStructure *s;
@@ -862,7 +1211,7 @@ gst_egueb_demux_decide_allocation (GstEguebDemux * thiz, GstQuery * query)
 }
 
 static gboolean
-gst_egueb_demux_src_negotiate_caps (GstPad * pad)
+gst_egueb_demux_video_negotiate_caps (GstPad * pad)
 {
   GstEguebDemux *thiz;
   GstBuffer *buf = NULL;
@@ -883,10 +1232,10 @@ gst_egueb_demux_src_negotiate_caps (GstPad * pad)
 
   if (caps && !gst_caps_is_empty (caps)) {
     /* fixate the caps and try to set it */
-    gst_egueb_demux_src_fixate_caps (pad, caps);
+    gst_egueb_demux_video_fixate_caps (pad, caps);
     caps = gst_caps_fixate (caps);
     GST_DEBUG_OBJECT (thiz, "Negotiated caps %" GST_PTR_FORMAT, caps);
-    ret = gst_egueb_demux_src_set_caps (pad, caps);
+    ret = gst_egueb_demux_video_set_caps (pad, caps);
     gst_pad_set_caps (pad, caps);
     gst_caps_unref (caps);
   } else {
@@ -901,7 +1250,7 @@ gst_egueb_demux_src_negotiate_caps (GstPad * pad)
 }
 #endif
 
-static GstBuffer * gst_egueb_demux_src_allocate_buffer (GstPad * pad)
+static GstBuffer * gst_egueb_demux_video_allocate_buffer (GstPad * pad)
 {
   GstEguebDemux *thiz;
   GstBuffer *buf = NULL;
@@ -917,7 +1266,7 @@ static GstBuffer * gst_egueb_demux_src_allocate_buffer (GstPad * pad)
     GstCaps *caps;
 
     /* renegotiate with downstream */
-    if (!gst_egueb_demux_src_negotiate_caps (pad)) {
+    if (!gst_egueb_demux_video_negotiate_caps (pad)) {
       GST_ERROR_OBJECT (thiz, "Failed negotiating caps");
       goto done;
     }
@@ -956,7 +1305,7 @@ done:
 }
 
 static void
-gst_egueb_demux_src_loop (gpointer user_data)
+gst_egueb_demux_video_loop (gpointer user_data)
 {
   GstEguebDemux *thiz;
   GstFlowReturn ret;
@@ -1085,7 +1434,7 @@ gst_egueb_demux_src_loop (gpointer user_data)
   }
 
   /* allocate our buffer */
-  buf = gst_egueb_demux_src_allocate_buffer (pad);
+  buf = gst_egueb_demux_video_allocate_buffer (pad);
   if (!buf) {
     GST_ELEMENT_ERROR (thiz, STREAM, FAILED,
         ("Internal data flow error."), ("Failed to allocate buffer."));
@@ -1106,6 +1455,10 @@ gst_egueb_demux_src_loop (gpointer user_data)
   GST_BUFFER_DURATION (buf) = thiz->duration;
   GST_BUFFER_TIMESTAMP (buf) = thiz->next_ts;
 
+  /* TODO for every pad added that belongs to a video provider which is
+   * PAUSED, make sure to send GAP events or empty buffers to make sure
+   * the pipeline will preroll
+   */
   ret = gst_pad_push (pad, buf);
   if (ret != GST_FLOW_OK) {
     if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_UNEXPECTED) {
@@ -1145,7 +1498,7 @@ pause:
 }
 
 static gboolean
-gst_egueb_demux_src_event_qos (GstPad * pad, GstEguebDemux * thiz,
+gst_egueb_demux_video_event_qos (GstPad * pad, GstEguebDemux * thiz,
     GstEvent * event)
 {
   GstQOSType type;
@@ -1189,7 +1542,7 @@ gst_egueb_demux_src_event_qos (GstPad * pad, GstEguebDemux * thiz,
 }
 
 static gboolean
-gst_egueb_demux_src_event_navigation (GstPad * pad, GstEguebDemux * thiz,
+gst_egueb_demux_video_event_navigation (GstPad * pad, GstEguebDemux * thiz,
     GstEvent * event)
 {
   if (!thiz->input)
@@ -1239,7 +1592,7 @@ gst_egueb_demux_src_event_navigation (GstPad * pad, GstEguebDemux * thiz,
 
 
 static gboolean
-gst_egueb_demux_src_event (GstPad * pad, GstObject * obj,
+gst_egueb_demux_video_event (GstPad * pad, GstObject * obj,
     GstEvent * event)
 {
   GstEguebDemux *thiz;
@@ -1251,13 +1604,13 @@ gst_egueb_demux_src_event (GstPad * pad, GstObject * obj,
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_QOS:
       g_mutex_lock (thiz->doc_lock);
-      ret = gst_egueb_demux_src_event_qos (pad, thiz, event);
+      ret = gst_egueb_demux_video_event_qos (pad, thiz, event);
       g_mutex_unlock (thiz->doc_lock);
       break;
 
     case GST_EVENT_NAVIGATION:
       g_mutex_lock (thiz->doc_lock);
-      ret = gst_egueb_demux_src_event_navigation (pad, thiz, event);
+      ret = gst_egueb_demux_video_event_navigation (pad, thiz, event);
       g_mutex_unlock (thiz->doc_lock);
     break;
 
@@ -1271,7 +1624,7 @@ gst_egueb_demux_src_event (GstPad * pad, GstObject * obj,
 }
 
 static gboolean
-gst_egueb_demux_src_query_duration (GstPad * pad, GstEguebDemux * thiz,
+gst_egueb_demux_video_query_duration (GstPad * pad, GstEguebDemux * thiz,
     GstQuery * query)
 {
   GstFormat format;
@@ -1291,7 +1644,7 @@ gst_egueb_demux_src_query_duration (GstPad * pad, GstEguebDemux * thiz,
 }
 
 static gboolean
-gst_egueb_demux_src_query_position (GstPad * pad, GstEguebDemux * thiz,
+gst_egueb_demux_video_query_position (GstPad * pad, GstEguebDemux * thiz,
     GstQuery * query)
 {
   GstFormat format;
@@ -1308,7 +1661,7 @@ gst_egueb_demux_src_query_position (GstPad * pad, GstEguebDemux * thiz,
 }
 
 static gboolean
-gst_egueb_demux_src_query (GstPad * pad, GstObject * obj,
+gst_egueb_demux_video_query (GstPad * pad, GstObject * obj,
     GstQuery * query)
 {
   GstEguebDemux *thiz;
@@ -1319,11 +1672,11 @@ gst_egueb_demux_src_query (GstPad * pad, GstObject * obj,
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_DURATION:
-      ret = gst_egueb_demux_src_query_duration (pad, thiz, query);
+      ret = gst_egueb_demux_video_query_duration (pad, thiz, query);
       break;
 
     case GST_QUERY_POSITION:
-      ret = gst_egueb_demux_src_query_position (pad, thiz, query);
+      ret = gst_egueb_demux_video_query_position (pad, thiz, query);
       break;
 
 #if HAVE_GST_1
@@ -1331,7 +1684,7 @@ gst_egueb_demux_src_query (GstPad * pad, GstObject * obj,
       {
         GstCaps *caps;
 
-        caps = gst_egueb_demux_src_get_caps (pad);
+        caps = gst_egueb_demux_video_get_caps (pad);
         /* TODO handle the filter */
         gst_query_set_caps_result (query, caps);
         gst_caps_unref (caps);
@@ -1376,26 +1729,26 @@ gst_egueb_demux_sink_chain_simple (GstPad * pad, GstBuffer * buffer)
 }
 
 static gboolean
-gst_egueb_demux_src_event_simple (GstPad * pad, GstEvent * event)
+gst_egueb_demux_video_event_simple (GstPad * pad, GstEvent * event)
 {
   GstObject *object;
   gboolean ret;
 
   object = gst_pad_get_parent (pad);
-  ret = gst_egueb_demux_src_event (pad, object, event);
+  ret = gst_egueb_demux_video_event (pad, object, event);
   gst_object_unref (object);
   return ret;
 }
 
 
 static gboolean
-gst_egueb_demux_src_query_simple (GstPad * pad, GstQuery * query)
+gst_egueb_demux_video_query_simple (GstPad * pad, GstQuery * query)
 {
   GstObject *object;
   gboolean ret;
 
   object = gst_pad_get_parent (pad);
-  ret = gst_egueb_demux_src_query (pad, object, query);
+  ret = gst_egueb_demux_video_query (pad, object, query);
   gst_object_unref (object);
   return ret;
 }
@@ -1533,24 +1886,24 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
 #endif
   gst_element_add_pad (GST_ELEMENT (thiz), pad);
 
-  pad = gst_pad_new_from_static_template (&gst_egueb_demux_src_factory,
+  pad = gst_pad_new_from_static_template (&gst_egueb_demux_video_factory,
       "src");
 #if HAVE_GST_1
   gst_pad_set_event_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_event));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_video_event));
   gst_pad_set_query_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_query));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_video_query));
 #else
   gst_pad_set_fixatecaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_fixate_caps));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_video_fixate_caps));
   gst_pad_set_setcaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_set_caps));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_video_set_caps));
   gst_pad_set_getcaps_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_get_caps));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_video_get_caps));
   gst_pad_set_event_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_event_simple));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_video_event_simple));
   gst_pad_set_query_function (pad,
-      GST_DEBUG_FUNCPTR (gst_egueb_demux_src_query_simple));
+      GST_DEBUG_FUNCPTR (gst_egueb_demux_video_query_simple));
 #endif
   gst_element_add_pad (GST_ELEMENT (thiz), pad);
 
@@ -1613,7 +1966,7 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
   sink_template = gst_egueb_demux_get_sink_template ();
   gst_element_class_add_pad_template (element_class, sink_template);
   gst_element_class_add_pad_template (element_class,
-      gst_static_pad_template_get (&gst_egueb_demux_src_factory));
+      gst_static_pad_template_get (&gst_egueb_demux_video_factory));
 
   gst_element_class_set_details_simple (element_class,
       "Egueb SVG Parser/Demuxer/Decoder",

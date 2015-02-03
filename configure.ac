@@ -71,11 +71,11 @@ fi
 
 case "$gstreamer_api" in
   1.0)
-  gst_egueb_modules_requirements_pc+=" gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0"
+  gst_egueb_modules_requirements_pc+=" gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 gstreamer-app-1.0"
   AC_DEFINE_UNQUOTED(HAVE_GST_1, [1], [Use GStreamer 1.0])
   ;;
   0.10)
-  gst_egueb_modules_requirements_pc+=" gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 egueb-video"
+  gst_egueb_modules_requirements_pc+=" gstreamer-0.10 gstreamer-base-0.10 gstreamer-interfaces-0.10 gstreamer-video-0.10 gstreamer-app-0.10 egueb-video"
   AC_DEFINE_UNQUOTED(HAVE_GST_0, [1], [Use GStreamer 0.10])
   ;;
   *)

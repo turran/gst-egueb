@@ -51,7 +51,7 @@ typedef struct _GstEguebDemuxClass GstEguebDemuxClass;
 
 struct _GstEguebDemux
 {
-  GstElement parent;
+  GstBin parent;
   /* properties */
   guint container_w;
   guint container_h;
@@ -94,6 +94,9 @@ struct _GstEguebDemux
   /* UI feature */
   Egueb_Dom_Input *input;
 
+  /* Multimedia feature */
+  Egueb_Dom_Feature *multimedia;
+
   gboolean done;
 
   /* TODO remove this */
@@ -107,7 +110,7 @@ struct _GstEguebDemux
 
 struct _GstEguebDemuxClass
 {
-  GstElementClass parent_class;
+  GstBinClass parent_class;
 };
 
 
