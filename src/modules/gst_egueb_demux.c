@@ -367,10 +367,13 @@ gst_egueb_demux_video_provider_set_state (GstEguebDemuxVideoProvider * thiz,
       gst_element_state_get_name (to),
       gst_element_state_get_name (parent_state));
   if (parent_state > to) {
+    GstStateChangeReturn ret;
+
     GST_INFO_OBJECT (thiz->bin, "Setting state to %s",
         gst_element_state_get_name (to));
     thiz->pending  = GST_STATE_VOID_PENDING;
-    gst_element_set_state (thiz->bin, to);
+    ret = gst_element_set_state (thiz->bin, to);
+    GST_ERROR ("ret = %d", ret);
   } else {
     GST_INFO_OBJECT (thiz->bin, "Keeping state %s for later",
         gst_element_state_get_name (to));
@@ -2118,9 +2121,12 @@ gst_egueb_demux_downgrade_state (GstEguebDemux * thiz,
       gst_element_get_state (child, &state, NULL, 0);
       GST_ERROR ("child state is %s", gst_element_state_get_name (state));
       if (state == from) {
+        GstStateChangeReturn ret;
+
         GST_ERROR_OBJECT (thiz, "Downgrading child '%s' state to %s",
             gst_element_get_name (child), gst_element_state_get_name (to));
-        gst_element_set_state (child, to);
+        ret = gst_element_set_state (child, to);
+        GST_ERROR ("ret = %d", ret);
       }
     }
     gst_object_unref(child);
@@ -2157,10 +2163,13 @@ gst_egueb_demux_upgrade_state (GstEguebDemux * thiz, GstState to)
 
       vp = g_object_get_data (G_OBJECT (child), "videoprovider");
       if (vp->pending != GST_STATE_VOID_PENDING && vp->pending >= to) {
+        GstStateChangeReturn ret;
+
         GST_ERROR_OBJECT (thiz, "Upgrading child '%s' state to %s",
             gst_element_get_name (child), gst_element_state_get_name (to));
         vp->pending = GST_STATE_VOID_PENDING;
-        gst_element_set_state (child, to);
+        ret = gst_element_set_state (child, to);
+        GST_ERROR ("ret = %d", ret);
       }
     }
     gst_object_unref(child);
@@ -2174,6 +2183,10 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
 {
   GstEguebDemux *thiz = GST_EGUEB_DEMUX (element);
   GstStateChangeReturn ret;
+
+  GST_ERROR ("Changing state from %s to %s",
+      gst_element_state_get_name (GST_STATE_TRANSITION_CURRENT (transition)),
+      gst_element_state_get_name (GST_STATE_TRANSITION_NEXT (transition)));
 
   switch (transition) {
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
@@ -2196,10 +2209,11 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
   }
 
   ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+  GST_ERROR ("ret = %d", ret);
 
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_PAUSED:
-      gst_egueb_demux_upgrade_state (thiz, GST_STATE_PLAYING);
+      gst_egueb_demux_upgrade_state (thiz, GST_STATE_PAUSED);
       break;
 
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
@@ -2214,7 +2228,6 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
       break;
   }
 
-beach:
   return ret;
 }
 
