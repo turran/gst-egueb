@@ -96,6 +96,7 @@ struct _GstEguebDemux
 
   /* Multimedia feature */
   Egueb_Dom_Feature *multimedia;
+  gint videoproviders;
 
   gboolean done;
 

@@ -162,6 +162,7 @@ typedef struct _GstEguebDemuxVideoProvider
   Enesim_Renderer *image;
   GstElement *bin;
   GstElement *uridecodebin;
+  GstState pending;
 } GstEguebDemuxVideoProvider;
 
 static void
@@ -260,6 +261,7 @@ gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
   GstStructure *s;
   const gchar *name;
 
+  GST_DEBUG_OBJECT (thiz->bin, "Pad added");
   /* create the videoconvert ! capsfilter or ffmpegcolorspace ! capsfiler
    * for video based caps, otherwise expose the pad
    */
@@ -278,7 +280,7 @@ gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
     GstPad *sinkpad;
     GstCaps *filter_caps;
 
-    GST_INFO_OBJECT (demux, "Creating video pipeline for caps %" GST_PTR_FORMAT, caps);
+    GST_INFO_OBJECT (thiz->bin, "Creating video pipeline for caps %" GST_PTR_FORMAT, caps);
 #if GST_CHECK_VERSION (1,0,0)
     conv = gst_element_factory_make ("videoconvert", NULL);
 #else
@@ -290,6 +292,7 @@ gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
         "video/x-raw",
         "format", G_TYPE_STRING, "BGRx",
 #else
+        "video/x-raw-rgb",
         "depth", G_TYPE_INT, 24, "bpp", G_TYPE_INT, 32,
         "endianness", G_TYPE_INT, G_BIG_ENDIAN,
         "red_mask", G_TYPE_INT, 0x0000ff00,
@@ -302,23 +305,29 @@ gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
 
     gst_bin_add_many (GST_BIN (thiz->bin), conv, filter, NULL);
     gst_element_link (conv, filter);
+    gst_element_sync_state_with_parent (conv);
+    gst_element_sync_state_with_parent (filter);
 
     sinkpad = gst_element_get_static_pad (conv, "sink");
     gst_pad_link (pad, sinkpad);
     gst_object_unref (sinkpad);
 
     srcpad = gst_element_get_static_pad (filter, "src");
+    name = "video";
   } else {
     srcpad = gst_object_ref (pad);
+    name = NULL;
   }
 
   /* ghost it on the bin */
-  GST_INFO_OBJECT (demux, "Exposing pad with caps %" GST_PTR_FORMAT, caps);
-  gpad = gst_ghost_pad_new (NULL, srcpad);
+  GST_INFO_OBJECT (thiz->bin, "Exposing pad with caps %" GST_PTR_FORMAT, caps);
+  gpad = gst_ghost_pad_new (name, srcpad);
 #if HAVE_GST_1
+#if 0
   gst_pad_add_probe (gpad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM |
       GST_PAD_PROBE_TYPE_DATA_UPSTREAM, gst_egueb_demux_video_pad_probe_cb,
       demux, NULL);
+#endif
 #endif
   gst_pad_set_active (gpad, TRUE);
   gst_element_add_pad (thiz->bin, gpad);
@@ -326,6 +335,49 @@ gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
   gst_caps_unref (caps);
   gst_object_unref (srcpad);
   gst_object_unref (demux);
+}
+
+static void
+gst_egueb_demux_video_uridecodebin_pad_removed_cb (GstElement * src,
+    GstPad * pad, GstEguebDemuxVideoProvider * thiz)
+{
+  GST_DEBUG_OBJECT (thiz->bin, "Pad removed");
+  /* TODO remove the ghost pad from the bin */
+}
+
+static void
+gst_egueb_demux_video_uridecodebin_no_more_pads_cb (GstElement * src,
+    GstEguebDemuxVideoProvider * thiz)
+{
+  GST_DEBUG_OBJECT (thiz->bin, "No more pads");
+  gst_element_no_more_pads (thiz->bin);
+}
+
+static void
+gst_egueb_demux_video_provider_set_state (GstEguebDemuxVideoProvider * thiz,
+    GstState to)
+{
+  GstObject *parent;
+  GstState parent_state;
+
+  parent = gst_element_get_parent (thiz->bin);
+  GST_STATE_LOCK (parent);
+  gst_element_get_state (GST_ELEMENT (parent), &parent_state, NULL, 0);
+  GST_INFO_OBJECT (thiz->bin, "Trying to set state to %s with parent state %s",
+      gst_element_state_get_name (to),
+      gst_element_state_get_name (parent_state));
+  if (parent_state > to) {
+    GST_INFO_OBJECT (thiz->bin, "Setting state to %s",
+        gst_element_state_get_name (to));
+    thiz->pending  = GST_STATE_VOID_PENDING;
+    gst_element_set_state (thiz->bin, to);
+  } else {
+    GST_INFO_OBJECT (thiz->bin, "Keeping state %s for later",
+        gst_element_state_get_name (to));
+    thiz->pending = to;
+  }
+  GST_STATE_UNLOCK (parent);
+  gst_object_unref (parent);
 }
 
 static void *
@@ -340,6 +392,10 @@ gst_egueb_demux_video_provider_descriptor_create (void)
   thiz->uridecodebin = gst_element_factory_make ("uridecodebin", NULL);
   g_signal_connect (G_OBJECT (thiz->uridecodebin), "pad-added",
       G_CALLBACK (gst_egueb_demux_video_uridecodebin_pad_added_cb), thiz);
+  g_signal_connect (G_OBJECT (thiz->uridecodebin), "pad-removed",
+      G_CALLBACK (gst_egueb_demux_video_uridecodebin_pad_removed_cb), thiz);
+  g_signal_connect (G_OBJECT (thiz->uridecodebin), "no-more-pads",
+      G_CALLBACK (gst_egueb_demux_video_uridecodebin_no_more_pads_cb), thiz);
   gst_bin_add (GST_BIN (thiz->bin), thiz->uridecodebin);
   
   return thiz;
@@ -349,12 +405,17 @@ static void
 gst_egueb_demux_video_provider_descriptor_destroy (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
+  GstObject *parent;
 
-  GST_ERROR ("Destroying");
+  GST_ERROR ("Destroying the video provider");
 
-  /* TODO remove the element from the bin */
-  //gst_element_set_state(thiz->playbin, GST_STATE_NULL);
-  //gst_object_unref(thiz->playbin);
+  if (thiz->bin) {
+    parent = gst_element_get_parent (thiz->bin);
+    gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_NULL);
+    gst_bin_remove (GST_BIN (parent), thiz->bin);
+    thiz->bin = NULL;
+    gst_object_unref (parent);
+  }
 
   if (thiz->image)
   {
@@ -370,12 +431,11 @@ gst_egueb_demux_video_provider_descriptor_open (void * data,
     Egueb_Dom_String * uri)
 {
   GstEguebDemuxVideoProvider *thiz = data;
+  const char *str;
 
-  GST_ERROR ("Open");
-  /* the uri that comes from the api must be absolute */
-  //gst_element_set_state(thiz->playbin, GST_STATE_READY);
-  g_object_set(thiz->uridecodebin, "uri", egueb_dom_string_string_get(uri),
-      NULL);
+  str = egueb_dom_string_string_get (uri);
+  GST_ERROR ("Open URI %s", str);
+  g_object_set(thiz->uridecodebin, "uri", str, NULL);
 }
 
 static void
@@ -383,21 +443,24 @@ gst_egueb_demux_video_provider_descriptor_close (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
-  GST_ERROR ("Close");
+  GST_ERROR_OBJECT (thiz->bin, "Closing");
+  gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_READY);
 }
 
 static void gst_egueb_demux_video_provider_descriptor_play(void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
-  GST_ERROR ("Play");
+  GST_ERROR_OBJECT (thiz->bin, "Playing");
+  gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_PLAYING);
 }
 
 static void gst_egueb_demux_video_provider_descriptor_pause(void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
-  GST_ERROR ("Pause");
+  GST_ERROR_OBJECT (thiz->bin, "Pausing");
+  gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_PAUSED);
 }
 
 static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
@@ -413,6 +476,165 @@ static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
 /*----------------------------------------------------------------------------*
  *                           Multimedia interface                             *
  *----------------------------------------------------------------------------*/
+static GstFlowReturn
+gst_egueb_demux_multimedia_video_chain (GstPad * pad, GstObject * obj,
+    GstBuffer * buffer)
+{
+  /* TODO check if it is on time, discard otherwise */
+  GST_ERROR ("Received buffers");
+  return GST_FLOW_OK;
+}
+
+static gboolean
+gst_egueb_demux_multimedia_video_query (GstPad * pad, GstObject * obj,
+    GstQuery * query)
+{
+  gboolean ret = FALSE;
+
+  GST_ERROR_OBJECT (obj, "Querying %s", GST_QUERY_TYPE_NAME (query));
+
+  switch (GST_QUERY_TYPE (query)) {
+#if HAVE_GST_1
+    case GST_QUERY_ALLOCATION:
+      /* TODO for the allocation, use the same allocator as our current sink? */
+      break;
+
+    case GST_QUERY_CAPS:
+      {
+        GstCaps *caps;
+
+        caps = gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+        gst_query_set_caps_result (query, caps);
+        gst_caps_unref (caps);
+        ret = TRUE;
+      }
+      break;
+#endif
+
+    default:
+      break;
+  }
+
+  return ret;
+}
+
+static gboolean
+gst_egueb_demux_multimedia_video_event (GstPad * pad, GstObject * obj,
+    GstEvent * event)
+{
+  gboolean ret = FALSE;
+
+  GST_ERROR_OBJECT (obj, "Received event '%s'", GST_EVENT_TYPE_NAME (event));
+
+  switch (GST_EVENT_TYPE (event)) {
+    /* Make the EOS trigger the EOS on the video provider notifier */
+    case GST_EVENT_EOS:
+      ret = TRUE;
+      break;
+
+#if HAVE_GST_1
+    case GST_EVENT_STREAM_START:
+    case GST_EVENT_SEGMENT:
+    /* We assume the caps event already tries to intersect with the
+     * template caps
+     */
+    case GST_EVENT_CAPS:
+      ret = TRUE;
+      break;
+#endif
+
+    default:
+      break;
+  }
+
+  gst_event_unref (event);
+
+  return ret;
+}
+
+#if HAVE_GST_0
+static GstFlowReturn
+gst_egueb_demux_multimedia_video_chain_simple (GstPad * pad,
+    GstBuffer * buffer)
+{
+  GstObject *object;
+  GstFlowReturn ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_multimedia_video_chain (pad, object, buffer);
+  gst_object_unref (object);
+
+  return ret;
+}
+
+static gboolean
+gst_egueb_demux_multimedia_video_query_simple (GstPad * pad, GstQuery * query)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_multimedia_video_query (pad, object, query);
+  gst_object_unref (object);
+  return ret;
+}
+
+static gboolean
+gst_egueb_demux_multimedia_video_event_simple (GstPad * pad, GstEvent * event)
+{
+  GstObject *object;
+  gboolean ret;
+
+  object = gst_pad_get_parent (pad);
+  ret = gst_egueb_demux_multimedia_video_event (pad, object, event);
+  gst_object_unref (object);
+  return ret;
+}
+#endif
+
+static void
+gst_egueb_demux_multimedia_pad_removed_cb (GstElement * src,
+    GstPad * pad, GstEguebDemux * thiz)
+{
+  GST_INFO_OBJECT (thiz, "Pad removed");
+}
+
+static void
+gst_egueb_demux_multimedia_no_more_pads_cb (GstElement * src,
+    GstEguebDemux * thiz)
+{
+  GST_INFO_OBJECT (thiz, "No more pads");
+}
+
+static void
+gst_egueb_demux_multimedia_pad_added_cb (GstElement * src,
+    GstPad * pad, GstEguebDemux * thiz)
+{
+  GST_INFO_OBJECT (thiz, "Pad added");
+  /* For video pads, we need to blend ourselves */
+  if (!strcmp (gst_object_get_name (GST_OBJECT (pad)), "video")) {
+    GstPad *proxy;
+
+    proxy = GST_PAD (gst_proxy_pad_get_internal (GST_PROXY_PAD (pad)));
+#if HAVE_GST_1
+    gst_pad_set_chain_function (proxy,
+        GST_DEBUG_FUNCPTR (gst_egueb_demux_multimedia_video_chain));
+    gst_pad_set_query_function (proxy,
+        GST_DEBUG_FUNCPTR (gst_egueb_demux_multimedia_video_query));
+    gst_pad_set_event_function (proxy,
+        GST_DEBUG_FUNCPTR (gst_egueb_demux_multimedia_video_event));
+#else
+    gst_pad_set_chain_function (proxy,
+        GST_DEBUG_FUNCPTR (gst_egueb_demux_multimedia_video_chain_simple));
+    gst_pad_set_query_function (proxy,
+        GST_DEBUG_FUNCPTR (gst_egueb_demux_multimedia_video_query_simple));
+    gst_pad_set_event_function (proxy,
+        GST_DEBUG_FUNCPTR (gst_egueb_demux_multimedia_video_event_simple));
+#endif
+    gst_object_unref (proxy);
+  }
+}
+
 static void 
 gst_egueb_demux_multimedia_video_cb(
 		Egueb_Dom_Event *ev, void *data)
@@ -423,6 +645,7 @@ gst_egueb_demux_multimedia_video_cb(
   Egueb_Dom_Node *n;
   Enesim_Renderer *r;
   const Egueb_Dom_Video_Provider_Notifier *notifier = NULL;
+  gchar *name;
 
   thiz = GST_EGUEB_DEMUX (data);
   GST_ERROR_OBJECT (thiz, "Multimedia event received");
@@ -435,11 +658,22 @@ gst_egueb_demux_multimedia_video_cb(
       notifier, enesim_renderer_ref (r), n);
   dvp = egueb_dom_video_provider_data_get (vp);
   dvp->image = r;
+  g_object_set_data (G_OBJECT (dvp->bin), "videoprovider", dvp);
 
+  /* add the pad added/removed callbacks */
+  g_signal_connect (G_OBJECT (dvp->bin), "pad-added",
+      G_CALLBACK (gst_egueb_demux_multimedia_pad_added_cb), thiz);
+  g_signal_connect (G_OBJECT (dvp->bin), "pad-removed",
+      G_CALLBACK (gst_egueb_demux_multimedia_pad_removed_cb), thiz);
+  g_signal_connect (G_OBJECT (dvp->bin), "no-more-pads",
+      G_CALLBACK (gst_egueb_demux_multimedia_no_more_pads_cb), thiz);
+  /* set a new name */
+  name = g_strdup_printf ("videoprovider%d", ++thiz->videoproviders);
+  gst_element_set_name (dvp->bin, name);
+  g_free (name);
   /* add the video pipeline to our own bin */
   gst_element_set_locked_state (dvp->bin, TRUE);
   gst_bin_add (GST_BIN (thiz), dvp->bin);
-  /* add the pad added/removed callbacks */
 
   /* finally set the video provider on the event */
   egueb_dom_event_multimedia_video_provider_set (ev, vp);
@@ -610,13 +844,6 @@ gst_egueb_demux_uri_set (GstEguebDemux * thiz, const gchar * uri)
   }
 
   thiz->location = g_strdup (uri);
-}
-
-static void
-gst_egueb_demux_buffer_free (void *data, void *user_data)
-{
-  Enesim_Buffer_Sw_Data *sdata = data;
-  g_free (sdata->rgb888.plane0);
 }
 
 static Eina_Bool
@@ -974,6 +1201,9 @@ gst_egueb_demux_cleanup (GstEguebDemux * thiz)
     g_free (thiz->location);
     thiz->location = NULL;
   }
+
+  /* set the counters */
+  thiz->videoproviders = 0;
 }
 
 static gboolean
@@ -988,10 +1218,10 @@ gst_egueb_demux_sink_event_eos (GstPad * pad, GstEguebDemux * thiz,
    */
   len = gst_adapter_available (thiz->adapter);
   if (len) {
-      GstBuffer *buf;
+    GstBuffer *buf;
 
-      buf = gst_adapter_take_buffer (thiz->adapter, len);
-      gst_egueb_demux_setup (thiz, buf);
+    buf = gst_adapter_take_buffer (thiz->adapter, len);
+    gst_egueb_demux_setup (thiz, buf);
   }
   return TRUE;
 }
@@ -1765,7 +1995,6 @@ gst_egueb_demux_sink_event_simple (GstPad * pad, GstEvent * event)
   return ret;
 }
 
-
 static GstFlowReturn
 gst_egueb_demux_sink_chain_simple (GstPad * pad, GstBuffer * buffer)
 {
@@ -1858,6 +2087,88 @@ gst_egueb_demux_set_property (GObject * object, guint prop_id,
   }
 }
 
+static void
+gst_egueb_demux_downgrade_state (GstEguebDemux * thiz,
+    GstState from, GstState to)
+{
+  GstIterator *it;
+  GstElement *child;
+#if HAVE_GST_1
+  GValue value = G_VALUE_INIT;
+#endif
+
+  GST_DEBUG_OBJECT (thiz, "Downgrading state from %s to %s",
+      gst_element_state_get_name (from),
+      gst_element_state_get_name (to));
+  it = gst_bin_iterate_elements (GST_BIN (thiz));
+#if HAVE_GST_1
+  while (GST_ITERATOR_OK == gst_iterator_next (it, &value)) {
+#else
+  while (GST_ITERATOR_OK == gst_iterator_next (it, (gpointer *)&child)) {
+#endif
+    const gchar *name;
+#if HAVE_GST_1
+    child = g_value_get_object (&value);
+#endif
+
+    name = gst_element_get_name (child);
+    if (!strncmp (name, "videoprovider", 13)) {
+      GstState state;
+
+      gst_element_get_state (child, &state, NULL, 0);
+      GST_ERROR ("child state is %s", gst_element_state_get_name (state));
+      if (state == from) {
+        GST_ERROR_OBJECT (thiz, "Downgrading child '%s' state to %s",
+            gst_element_get_name (child), gst_element_state_get_name (to));
+        gst_element_set_state (child, to);
+      }
+    }
+    gst_object_unref(child);
+  }
+  gst_iterator_free(it);
+}
+
+static void
+gst_egueb_demux_upgrade_state (GstEguebDemux * thiz, GstState to)
+{
+  GstIterator *it;
+  GstElement *child;
+#if HAVE_GST_1
+  GValue value = G_VALUE_INIT;
+#endif
+
+  GST_DEBUG_OBJECT (thiz, "Upgrading state to %s",
+      gst_element_state_get_name (to));
+  it = gst_bin_iterate_elements (GST_BIN (thiz));
+#if HAVE_GST_1
+  while (GST_ITERATOR_OK == gst_iterator_next (it, &value)) {
+#else
+  while (GST_ITERATOR_OK == gst_iterator_next (it, (gpointer *)&child)) {
+#endif
+    const gchar *name;
+#if HAVE_GST_1
+    child = g_value_get_object (&value);
+#endif
+
+    name = gst_element_get_name (child);
+    if (!strncmp (name, "videoprovider", 13)) {
+      GstEguebDemuxVideoProvider *vp;
+      GstState state;
+
+      vp = g_object_get_data (G_OBJECT (child), "videoprovider");
+      if (vp->pending != GST_STATE_VOID_PENDING && vp->pending >= to) {
+        GST_ERROR_OBJECT (thiz, "Upgrading child '%s' state to %s",
+            gst_element_get_name (child), gst_element_state_get_name (to));
+        vp->pending = GST_STATE_VOID_PENDING;
+        gst_element_set_state (child, to);
+      }
+    }
+    gst_object_unref(child);
+  }
+  gst_iterator_free(it);
+}
+
+
 static GstStateChangeReturn
 gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
 {
@@ -1865,7 +2176,19 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
   GstStateChangeReturn ret;
 
   switch (transition) {
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
+    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+      gst_egueb_demux_downgrade_state (thiz, GST_STATE_PLAYING,
+          GST_STATE_PAUSED);
+      break;
+
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      gst_egueb_demux_downgrade_state (thiz, GST_STATE_PAUSED,
+          GST_STATE_READY);
+      break;
+
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      gst_egueb_demux_downgrade_state (thiz, GST_STATE_READY,
+          GST_STATE_NULL);
       break;
 
     default:
@@ -1875,6 +2198,14 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
   ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
 
   switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
+      gst_egueb_demux_upgrade_state (thiz, GST_STATE_PLAYING);
+      break;
+
+    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+      gst_egueb_demux_upgrade_state (thiz, GST_STATE_PLAYING);
+      break;
+
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       gst_egueb_demux_cleanup (thiz);
       break;
@@ -1899,12 +2230,13 @@ gst_egueb_demux_dispose (GObject * object)
 
   if (thiz->doc_lock)
     g_mutex_free (thiz->doc_lock);
-  GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
 
   if (thiz->adapter) {
     g_object_unref (thiz->adapter);
     thiz->adapter = NULL;
   }
+
+  GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
 
   /* Do not close the libs, some of its dependencies
    * do not close correctly (fontconfig for example)
