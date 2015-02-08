@@ -101,7 +101,7 @@ gst_egueb_video_bin_appsink_show (GstEguebVideoBin * thiz,
 {
   Enesim_Surface *surface;
 
-  GST_INFO ("Buffer received");
+  GST_DEBUG_OBJECT (thiz, "Buffer received");
 
   surface = gst_egueb_video_bin_surface_new (buffer, caps);
   /* set the new surface on the renderer */

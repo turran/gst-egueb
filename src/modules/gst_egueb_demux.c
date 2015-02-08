@@ -101,6 +101,7 @@ typedef struct _GstEguebDemuxVideoProvider
 {
   GstEguebDemux *demux;
   GstElement *bin;
+  GstState requested;
 } GstEguebDemuxVideoProvider;
 
 static void *
@@ -110,6 +111,7 @@ gst_egueb_demux_video_provider_descriptor_create (void)
 
   thiz = g_new0 (GstEguebDemuxVideoProvider, 1);
   thiz->bin = g_object_new (GST_TYPE_EGUEB_VIDEO_BIN, NULL);
+  thiz->requested = GST_STATE_READY;
 
   return thiz;
 }
@@ -119,19 +121,14 @@ gst_egueb_demux_video_provider_descriptor_destroy (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
-  GST_ERROR ("Destroying the video provider");
-  gst_element_set_state (thiz->bin, GST_STATE_NULL);
-#if 0
-  parent = gst_element_get_parent (thiz->bin);
-  gst_bin_remove (GST_BIN (parent), thiz->bin);
-  thiz->bin = NULL;
-  gst_object_unref (parent);
+  GST_DEBUG_OBJECT (thiz->bin, "Destroying the video provider");
 
-  if (thiz->image) {
-    enesim_renderer_unref (thiz->image);
-    thiz->image = NULL;
-  }
-#endif
+  g_mutex_lock (thiz->demux->vproviders_lock);
+  thiz->requested = GST_STATE_NULL;
+  gst_element_set_state (thiz->bin, GST_STATE_NULL);
+  thiz->demux->vproviders = g_list_remove (thiz->demux->vproviders, thiz);
+  g_mutex_unlock (thiz->demux->vproviders_lock);
+
   g_free (thiz);
 }
 
@@ -143,7 +140,7 @@ gst_egueb_demux_video_provider_descriptor_open (void * data,
   const char *str;
 
   str = egueb_dom_string_string_get (uri);
-  GST_ERROR ("Open URI %s", str);
+  GST_INFO_OBJECT (thiz->bin, "Open URI %s", str);
   g_object_set (thiz->bin, "uri", str, NULL);
 }
 
@@ -152,8 +149,11 @@ gst_egueb_demux_video_provider_descriptor_close (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
-  GST_ERROR_OBJECT (thiz->bin, "Closing");
+  GST_DEBUG_OBJECT (thiz->bin, "Closing");
+  g_mutex_lock (thiz->demux->vproviders_lock);
+  thiz->requested = GST_STATE_READY;
   gst_element_set_state (thiz->bin, GST_STATE_READY);
+  g_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
 static void
@@ -161,8 +161,11 @@ gst_egueb_demux_video_provider_descriptor_play (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
-  GST_ERROR_OBJECT (thiz->bin, "Playing");
+  GST_DEBUG_OBJECT (thiz->bin, "Playing");
+  g_mutex_lock (thiz->demux->vproviders_lock);
+  thiz->requested = GST_STATE_PLAYING;
   gst_element_set_state (thiz->bin, GST_STATE_PLAYING);
+  g_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
 static void
@@ -170,8 +173,11 @@ gst_egueb_demux_video_provider_descriptor_pause (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
-  GST_ERROR_OBJECT (thiz->bin, "Pausing");
+  GST_DEBUG_OBJECT (thiz->bin, "Pausing");
+  g_mutex_lock (thiz->demux->vproviders_lock);
+  thiz->requested = GST_STATE_PAUSED;
   gst_element_set_state (thiz->bin, GST_STATE_PAUSED);
+  g_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
 static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
@@ -359,7 +365,7 @@ gst_egueb_demux_multimedia_video_cb(
   gchar *name;
 
   thiz = GST_EGUEB_DEMUX (data);
-  GST_ERROR_OBJECT (thiz, "Multimedia event received");
+  GST_INFO_OBJECT (thiz, "Multimedia event received");
 
   n = egueb_dom_event_target_get (ev);
   r = egueb_dom_event_multimedia_video_renderer_get (ev);
@@ -370,6 +376,7 @@ gst_egueb_demux_multimedia_video_cb(
   dvp = egueb_dom_video_provider_data_get (vp);
   g_object_set (dvp->bin, "renderer", enesim_renderer_ref (r), NULL);
   g_object_set (dvp->bin, "notifier", notifier, NULL);
+  dvp->demux = thiz;
 
   /* add the pad added/removed callbacks */
   g_signal_connect (G_OBJECT (dvp->bin), "pad-added",
@@ -379,12 +386,18 @@ gst_egueb_demux_multimedia_video_cb(
   g_signal_connect (G_OBJECT (dvp->bin), "no-more-pads",
       G_CALLBACK (gst_egueb_demux_multimedia_no_more_pads_cb), thiz);
   /* set a new name */
-  name = g_strdup_printf ("videoprovider%d", ++thiz->videoproviders);
+  name = g_strdup_printf ("videoprovider%d", ++thiz->vproviders_count);
   gst_element_set_name (dvp->bin, name);
   g_free (name);
-  /* add the video pipeline to our own bin */
+
+  /* we will control the states ourselves */
   gst_element_set_locked_state (dvp->bin, TRUE);
+
+  /* add the video pipeline to our own bin */
+  g_mutex_lock (thiz->vproviders_lock);
   gst_bin_add (GST_BIN (thiz), dvp->bin);
+  thiz->vproviders = g_list_append (thiz->vproviders, dvp);
+  g_mutex_unlock (thiz->vproviders_lock);
 
   /* finally set the video provider on the event */
   egueb_dom_event_multimedia_video_provider_set (ev, vp);
@@ -418,6 +431,9 @@ gst_egueb_demux_multimedia_cleanup (GstEguebDemux * thiz)
     egueb_dom_feature_unref (thiz->multimedia);
     thiz->multimedia = NULL;
   }
+
+  /* set the counters */
+  thiz->vproviders_count = 0;
 }
 
 /* Add the templates based on the implementation mime */
@@ -913,8 +929,14 @@ gst_egueb_demux_cleanup (GstEguebDemux * thiz)
     thiz->location = NULL;
   }
 
-  /* set the counters */
-  thiz->videoproviders = 0;
+  /* check that we do not have any video provider dangling
+   * those must have been destroyed by the node using it
+   */
+  if (thiz->vproviders) {
+    GST_WARNING_OBJECT (thiz, "Still need to destroy the video provider");
+  }
+  g_list_free (thiz->vproviders);
+  thiz->vproviders = NULL;
 }
 
 static gboolean
@@ -1845,93 +1867,58 @@ gst_egueb_demux_downgrade_state (GstEguebDemux * thiz,
 }
 
 static void
-gst_egueb_demux_upgrade_state (GstEguebDemux * thiz, GstState to)
+gst_egueb_demux_unlock_states (GstEguebDemux * thiz, GstState to)
 {
-#if 0
-  GstIterator *it;
-  GstElement *child;
-#if HAVE_GST_1
-  GValue value = G_VALUE_INIT;
-#endif
+  GList *l;
 
-  GST_DEBUG_OBJECT (thiz, "Upgrading state to %s",
-      gst_element_state_get_name (to));
-  it = gst_bin_iterate_elements (GST_BIN (thiz));
-#if HAVE_GST_1
-  while (GST_ITERATOR_OK == gst_iterator_next (it, &value)) {
-#else
-  while (GST_ITERATOR_OK == gst_iterator_next (it, (gpointer *)&child)) {
-#endif
-    const gchar *name;
-#if HAVE_GST_1
-    child = g_value_get_object (&value);
-#endif
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+    GstStateChangeReturn ret;
 
-    name = gst_element_get_name (child);
-    if (!strncmp (name, "videoprovider", 13)) {
-      GstEguebDemuxVideoProvider *vp;
-      GstState state;
-
-      vp = g_object_get_data (G_OBJECT (child), "videoprovider");
-      if (vp->pending != GST_STATE_VOID_PENDING && vp->pending >= to) {
-        GstStateChangeReturn ret;
-
-        GST_ERROR_OBJECT (thiz, "Upgrading child '%s' state to %s",
-            gst_element_get_name (child), gst_element_state_get_name (to));
-        vp->pending = GST_STATE_VOID_PENDING;
-        ret = gst_element_set_state (child, to);
-        GST_ERROR ("ret = %d", ret);
-      }
-    }
-    gst_object_unref(child);
+    if (vp->requested >= to)
+      gst_element_set_locked_state (vp->bin, FALSE);
   }
-  gst_iterator_free(it);
-#endif
 }
 
+static void
+gst_egueb_demux_lock_states (GstEguebDemux * thiz)
+{
+  GList *l;
+
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+    gst_element_set_locked_state (vp->bin, TRUE);
+  }
+}
 
 static GstStateChangeReturn
 gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
 {
   GstEguebDemux *thiz = GST_EGUEB_DEMUX (element);
   GstStateChangeReturn ret;
+  GstState from, to;
 
-  GST_ERROR ("Changing state from %s to %s",
-      gst_element_state_get_name (GST_STATE_TRANSITION_CURRENT (transition)),
-      gst_element_state_get_name (GST_STATE_TRANSITION_NEXT (transition)));
+  from = GST_STATE_TRANSITION_CURRENT (transition);
+  to = GST_STATE_TRANSITION_NEXT (transition);
 
-  switch (transition) {
-    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      gst_egueb_demux_downgrade_state (thiz, GST_STATE_PLAYING,
-          GST_STATE_PAUSED);
-      break;
+  GST_LOG_OBJECT (thiz, "Changing state from %s to %s",
+      gst_element_state_get_name (from),
+      gst_element_state_get_name (to));
 
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      gst_egueb_demux_downgrade_state (thiz, GST_STATE_PAUSED,
-          GST_STATE_READY);
-      break;
-
-    case GST_STATE_CHANGE_READY_TO_NULL:
-      gst_egueb_demux_downgrade_state (thiz, GST_STATE_READY,
-          GST_STATE_NULL);
-      break;
-
-    default:
-      break;
-  }
+  g_mutex_lock (thiz->vproviders_lock);
+  /* In order to set the new base clock on every element we need to pause->playing
+   * on every async_start/done, for that we need to unlock the state of the
+   * videoproviders
+   */
+  gst_egueb_demux_unlock_states (thiz, to);
 
   ret = GST_ELEMENT_CLASS (gst_egueb_demux_parent_class)->change_state (element, transition);
-  GST_ERROR ("ret = %d", ret);
+
+  /* Lock again any unlocked vprovider */
+  gst_egueb_demux_lock_states (thiz);
+  g_mutex_unlock (thiz->vproviders_lock);
 
   switch (transition) {
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
-      gst_egueb_demux_upgrade_state (thiz, GST_STATE_PAUSED);
-      break;
-
-    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
-      gst_egueb_demux_upgrade_state (thiz, GST_STATE_PLAYING);
-      break;
-
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       gst_egueb_demux_cleanup (thiz);
       break;
@@ -1947,6 +1934,7 @@ static void
 gst_egueb_demux_dispose (GObject * object)
 {
   GstEguebDemux *thiz = GST_EGUEB_DEMUX (object);
+  GList *l;
 
   GST_DEBUG_OBJECT (thiz, "Disposing");
   gst_egueb_demux_cleanup (thiz);
@@ -1960,6 +1948,8 @@ gst_egueb_demux_dispose (GObject * object)
     g_object_unref (thiz->adapter);
     thiz->adapter = NULL;
   }
+
+  g_mutex_free (thiz->vproviders_lock);
 
   GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
 
@@ -2020,6 +2010,12 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
   thiz->segment = gst_segment_new ();
   gst_segment_init (thiz->segment, GST_FORMAT_TIME);
   thiz->doc_lock = g_mutex_new ();
+
+  /* for multimedia */
+  thiz->vproviders_count = 0;
+  thiz->vproviders_lock = g_mutex_new ();
+  thiz->vproviders = NULL;
+
   /* initial seek segment position */
   thiz->seek = GST_CLOCK_TIME_NONE;
   thiz->next_ts = 0;

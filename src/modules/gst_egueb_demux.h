@@ -96,9 +96,9 @@ struct _GstEguebDemux
 
   /* Multimedia feature */
   Egueb_Dom_Feature *multimedia;
-  GList *providers;
-  GMutex *providers_lock;
-  gint videoproviders;
+  GList *vproviders;
+  GMutex *vproviders_lock;
+  gint vproviders_count;
 
   gboolean done;
 
