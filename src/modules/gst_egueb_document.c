@@ -360,25 +360,6 @@ static void _gst_egueb_document_image_appsrc_need_data_cb (
 /*----------------------------------------------------------------------------*
  *                               IO interface                                 *
  *----------------------------------------------------------------------------*/
-static void _gst_egueb_document_feature_multimedia_video_cb(
-		Egueb_Dom_Event *ev, void *data)
-{
-#if HAVE_GST_0
-	Egueb_Dom_Video_Provider *vp = NULL;
-	Egueb_Dom_Node *n;
-	Enesim_Renderer *r;
-	const Egueb_Dom_Video_Provider_Notifier *notifier = NULL;
-
-	n = egueb_dom_event_target_get(ev);
-	r = egueb_dom_event_multimedia_video_renderer_get(ev);
-	vp = egueb_video_provider_new(NULL, r, n);
-	egueb_dom_event_multimedia_video_provider_set(ev, vp);
-	egueb_dom_node_unref(n);
-#endif
-}
-/*----------------------------------------------------------------------------*
- *                               IO interface                                 *
- *----------------------------------------------------------------------------*/
 static void _gst_egueb_document_feature_io_data_cb(Egueb_Dom_Event *ev, void *data)
 {
 	Gst_Egueb_Document *thiz = data;
@@ -525,15 +506,6 @@ static void _gst_egueb_document_feature_io_cleanup(Gst_Egueb_Document *thiz)
 			EGUEB_DOM_EVENT_IO_IMAGE,
 			_gst_egueb_document_feature_io_image_cb, EINA_TRUE, thiz);
 }
-
-static void _gst_egueb_document_feature_multimedia_cleanup(
-		Gst_Egueb_Document *thiz)
-{
-	egueb_dom_node_event_listener_remove(thiz->topmost,
-			EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
-			_gst_egueb_document_feature_multimedia_video_cb,
-			EINA_TRUE, thiz);
-}
 /*============================================================================*
  *                                 Global                                     *
  *============================================================================*/
@@ -600,22 +572,6 @@ void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz)
 	thiz->io = feature;
 }
 
-void gst_egueb_document_feature_multimedia_setup(Gst_Egueb_Document *thiz)
-{
-	Egueb_Dom_Feature *feature;
-
-	if (thiz->multimedia) return;
-
-	feature = egueb_dom_node_feature_get(thiz->topmost,
-			EGUEB_DOM_FEATURE_MULTIMEDIA_NAME, NULL);
-	if (!feature) return;
-
-	egueb_dom_node_event_listener_add(thiz->topmost,
-			EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
-			_gst_egueb_document_feature_multimedia_video_cb,
-			EINA_TRUE, thiz);
-	thiz->multimedia = feature;
-}
 /*============================================================================*
  *                                   API                                      *
  *============================================================================*/
