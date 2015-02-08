@@ -33,11 +33,8 @@
  *   branch
  */
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
 #include "gst_egueb_demux.h"
+#include "gst_egueb_video_bin.h"
 #include <gst/app/gstappsink.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_egueb_demux_debug);
@@ -98,309 +95,22 @@ enum
 };
 
 /*----------------------------------------------------------------------------*
- *                              Video surface                                 *
- *----------------------------------------------------------------------------*/
-typedef struct _GstEguebDemuxVideoSurface
-{
-  GstBuffer *buffer;
-#if HAVE_GST_1
-  GstMapInfo mi;
-#endif
-} GstEguebDemuxVideoSurface;
-
-static void
-gst_egueb_demux_video_surface_free (void * data, void * user_data)
-{
-  GstEguebDemuxVideoSurface * thiz = user_data;
-
-#if HAVE_GST_1
-  gst_buffer_unmap (thiz->buffer, &thiz->mi);
-#endif
-  gst_buffer_unref (thiz->buffer);
-  g_free (thiz);
-}
-
-static Enesim_Surface *
-gst_egueb_demux_video_surface_new (GstBuffer * buffer, GstCaps * caps)
-{
-  GstEguebDemuxVideoSurface *thiz;
-  GstStructure *s;
-  Enesim_Surface *surface;
-  guint8 * data;
-  gint width;
-  gint height;
-  gint stride;
-
-  s = gst_caps_get_structure (caps, 0);
-  /* get the width and height */
-  gst_structure_get_int (s, "width", &width);
-  gst_structure_get_int (s, "height", &height);
-  gst_caps_unref (caps);
-
-  thiz = g_new0 (GstEguebDemuxVideoSurface, 1);
-  thiz->buffer = buffer;
-
-#if HAVE_GST_1
-  gst_buffer_map (thiz->buffer, &thiz->mi, GST_MAP_READ);
-  data = thiz->mi.data; 
-  stride = GST_ROUND_UP_4 (width * 4);
-#else
-  data = GST_BUFFER_DATA (thiz->buffer);
-  stride = GST_ROUND_UP_4 (width * 4);
-#endif
-  surface = enesim_surface_new_data_from (ENESIM_FORMAT_ARGB8888,
-      width, height, EINA_FALSE, data, stride,
-      gst_egueb_demux_video_surface_free, thiz);
-
-  return surface;
-}
-/*----------------------------------------------------------------------------*
  *                             Video provider                                 *
  *----------------------------------------------------------------------------*/
 typedef struct _GstEguebDemuxVideoProvider
 {
-  Enesim_Renderer *image;
-  GstElement *bin;
-  GstElement *uridecodebin;
-  GstState pending;
-} GstEguebDemuxVideoProvider;
-
-static void
-gst_egueb_demux_video_appsink_show (GstEguebDemuxVideoProvider * thiz,
-    GstBuffer * buffer, GstCaps * caps)
-{
-  Enesim_Surface *surface;
-
-  GST_INFO ("Buffer received");
-
-  surface = gst_egueb_demux_video_surface_new (buffer, caps);
-  /* set the new surface on the renderer */
-  enesim_renderer_lock (thiz->image);
-  enesim_renderer_image_source_surface_set (thiz->image, surface);
-  enesim_renderer_unlock (thiz->image);
-}
-
-static GstFlowReturn
-gst_egueb_demux_video_appsink_preroll_cb (GstAppSink * sink, gpointer user_data)
-{
-  GstEguebDemuxVideoProvider *thiz = user_data;
-#if HAVE_GST_1
-  GstSample *sample;
-#endif
-  GstBuffer *buffer;
-  GstCaps *caps;
-
-#if HAVE_GST_1
-  sample =  gst_app_sink_pull_preroll (sink);
-  buffer = gst_sample_get_buffer (sample);
-  caps = gst_caps_ref (gst_sample_get_caps (sample));
-#else
-  buffer = gst_app_sink_pull_preroll (sink);
-  caps = gst_buffer_get_caps (buffer);
-#endif
-
-  gst_egueb_demux_video_appsink_show (thiz, buffer, caps);
-  gst_caps_unref (caps);
-
-  return GST_FLOW_OK;
-}
-
-static GstFlowReturn
-gst_egueb_demux_video_appsink_buffer_cb (GstAppSink * sink, gpointer user_data)
-{
-  GstEguebDemuxVideoProvider *thiz = user_data;
-#if HAVE_GST_1
-  GstSample *sample;
-#endif
-  GstBuffer *buffer;
-  GstCaps *caps;
-
-#if HAVE_GST_1
-  sample =  gst_app_sink_pull_sample (sink);
-  buffer = gst_sample_get_buffer (sample);
-  caps = gst_caps_ref (gst_sample_get_caps (sample));
-#else
-  buffer = gst_app_sink_pull_preroll (sink);
-  caps = gst_buffer_get_caps (buffer);
-#endif
-
-  gst_egueb_demux_video_appsink_show (thiz, buffer, caps);
-  gst_caps_unref (caps);
-
-  return GST_FLOW_OK;
-}
-
-#if HAVE_GST_1
-static GstPadProbeReturn
-gst_egueb_demux_video_pad_probe_cb (GstPad * pad,
-    GstPadProbeInfo *info, gpointer user_data)
-{
-  GstEguebDemux *demux = GST_EGUEB_DEMUX (user_data);
-
-  if (info->type & GST_PAD_PROBE_TYPE_BUFFER) {
-    GST_ERROR ("buffer on %s", GST_PAD_NAME (pad));
-  } else if (info->type & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM) {
-    GST_ERROR ("event %s downstream on %s", GST_PAD_NAME (pad),
-      GST_EVENT_TYPE_NAME (GST_PAD_PROBE_INFO_EVENT (info)));
-  } else {
-    GST_ERROR ("something else %d", info->type);
-  }
-
-  return GST_PAD_PROBE_OK;
-}
-#endif
-
-static void
-gst_egueb_demux_video_uridecodebin_pad_added_cb (GstElement * src,
-    GstPad * pad, GstEguebDemuxVideoProvider * thiz)
-{
   GstEguebDemux *demux;
-  GstElement *parent;
-  GstPad  *gpad, *srcpad = NULL;
-  GstCaps *caps;
-  GstStructure *s;
-  const gchar *name;
-
-  GST_DEBUG_OBJECT (thiz->bin, "Pad added");
-  /* create the videoconvert ! capsfilter or ffmpegcolorspace ! capsfiler
-   * for video based caps, otherwise expose the pad
-   */
-#if GST_CHECK_VERSION (1,0,0)
-  caps = gst_pad_query_caps (pad, NULL);
-#else
-  caps = gst_pad_get_caps_reffed (pad);
-#endif
-
-  demux = GST_EGUEB_DEMUX (gst_object_get_parent (GST_OBJECT (thiz->bin)));
-
-  s = gst_caps_get_structure (caps, 0);
-  name = gst_structure_get_name (s);
-  if (!strncmp (name, "video", 5)) {
-    GstElement *conv, *filter;
-    GstPad *sinkpad;
-    GstCaps *filter_caps;
-
-    GST_INFO_OBJECT (thiz->bin, "Creating video pipeline for caps %" GST_PTR_FORMAT, caps);
-#if GST_CHECK_VERSION (1,0,0)
-    conv = gst_element_factory_make ("videoconvert", NULL);
-#else
-    conv = gst_element_factory_make ("ffmpegcolorspace", NULL);
-#endif
-    filter = gst_element_factory_make ("capsfilter", NULL);
-    filter_caps =  gst_caps_new_simple (
-#if HAVE_GST_1
-        "video/x-raw",
-        "format", G_TYPE_STRING, "BGRx",
-#else
-        "video/x-raw-rgb",
-        "depth", G_TYPE_INT, 24, "bpp", G_TYPE_INT, 32,
-        "endianness", G_TYPE_INT, G_BIG_ENDIAN,
-        "red_mask", G_TYPE_INT, 0x0000ff00,
-        "green_mask", G_TYPE_INT, 0x00ff0000,
-        "blue_mask", G_TYPE_INT, 0xff000000,
-#endif
-        NULL);
-    g_object_set (G_OBJECT (filter), "caps", filter_caps, NULL);
-    gst_caps_unref (filter_caps);
-
-    gst_bin_add_many (GST_BIN (thiz->bin), conv, filter, NULL);
-    gst_element_link (conv, filter);
-    gst_element_sync_state_with_parent (conv);
-    gst_element_sync_state_with_parent (filter);
-
-    sinkpad = gst_element_get_static_pad (conv, "sink");
-    gst_pad_link (pad, sinkpad);
-    gst_object_unref (sinkpad);
-
-    srcpad = gst_element_get_static_pad (filter, "src");
-    name = "video";
-  } else {
-    srcpad = gst_object_ref (pad);
-    name = NULL;
-  }
-
-  /* ghost it on the bin */
-  GST_INFO_OBJECT (thiz->bin, "Exposing pad with caps %" GST_PTR_FORMAT, caps);
-  gpad = gst_ghost_pad_new (name, srcpad);
-#if HAVE_GST_1
-#if 0
-  gst_pad_add_probe (gpad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM |
-      GST_PAD_PROBE_TYPE_DATA_UPSTREAM, gst_egueb_demux_video_pad_probe_cb,
-      demux, NULL);
-#endif
-#endif
-  gst_pad_set_active (gpad, TRUE);
-  gst_element_add_pad (thiz->bin, gpad);
-
-  gst_caps_unref (caps);
-  gst_object_unref (srcpad);
-  gst_object_unref (demux);
-}
-
-static void
-gst_egueb_demux_video_uridecodebin_pad_removed_cb (GstElement * src,
-    GstPad * pad, GstEguebDemuxVideoProvider * thiz)
-{
-  GST_DEBUG_OBJECT (thiz->bin, "Pad removed");
-  /* TODO remove the ghost pad from the bin */
-}
-
-static void
-gst_egueb_demux_video_uridecodebin_no_more_pads_cb (GstElement * src,
-    GstEguebDemuxVideoProvider * thiz)
-{
-  GST_DEBUG_OBJECT (thiz->bin, "No more pads");
-  gst_element_no_more_pads (thiz->bin);
-}
-
-static void
-gst_egueb_demux_video_provider_set_state (GstEguebDemuxVideoProvider * thiz,
-    GstState to)
-{
-  GstObject *parent;
-  GstState parent_state;
-
-  parent = gst_element_get_parent (thiz->bin);
-  GST_STATE_LOCK (parent);
-  gst_element_get_state (GST_ELEMENT (parent), &parent_state, NULL, 0);
-  GST_INFO_OBJECT (thiz->bin, "Trying to set state to %s with parent state %s",
-      gst_element_state_get_name (to),
-      gst_element_state_get_name (parent_state));
-  if (parent_state > to) {
-    GstStateChangeReturn ret;
-
-    GST_INFO_OBJECT (thiz->bin, "Setting state to %s",
-        gst_element_state_get_name (to));
-    thiz->pending  = GST_STATE_VOID_PENDING;
-    ret = gst_element_set_state (thiz->bin, to);
-    GST_ERROR ("ret = %d", ret);
-  } else {
-    GST_INFO_OBJECT (thiz->bin, "Keeping state %s for later",
-        gst_element_state_get_name (to));
-    thiz->pending = to;
-  }
-  GST_STATE_UNLOCK (parent);
-  gst_object_unref (parent);
-}
+  GstElement *bin;
+} GstEguebDemuxVideoProvider;
 
 static void *
 gst_egueb_demux_video_provider_descriptor_create (void)
 {
   GstEguebDemuxVideoProvider *thiz;
-  GstElement *uridecodebin;
 
   thiz = g_new0 (GstEguebDemuxVideoProvider, 1);
-  thiz->bin = gst_bin_new (NULL);
+  thiz->bin = g_object_new (GST_TYPE_EGUEB_VIDEO_BIN, NULL);
 
-  thiz->uridecodebin = gst_element_factory_make ("uridecodebin", NULL);
-  g_signal_connect (G_OBJECT (thiz->uridecodebin), "pad-added",
-      G_CALLBACK (gst_egueb_demux_video_uridecodebin_pad_added_cb), thiz);
-  g_signal_connect (G_OBJECT (thiz->uridecodebin), "pad-removed",
-      G_CALLBACK (gst_egueb_demux_video_uridecodebin_pad_removed_cb), thiz);
-  g_signal_connect (G_OBJECT (thiz->uridecodebin), "no-more-pads",
-      G_CALLBACK (gst_egueb_demux_video_uridecodebin_no_more_pads_cb), thiz);
-  gst_bin_add (GST_BIN (thiz->bin), thiz->uridecodebin);
-  
   return thiz;
 }
 
@@ -408,24 +118,20 @@ static void
 gst_egueb_demux_video_provider_descriptor_destroy (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
-  GstObject *parent;
 
   GST_ERROR ("Destroying the video provider");
+  gst_element_set_state (thiz->bin, GST_STATE_NULL);
+#if 0
+  parent = gst_element_get_parent (thiz->bin);
+  gst_bin_remove (GST_BIN (parent), thiz->bin);
+  thiz->bin = NULL;
+  gst_object_unref (parent);
 
-  if (thiz->bin) {
-    parent = gst_element_get_parent (thiz->bin);
-    gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_NULL);
-    gst_bin_remove (GST_BIN (parent), thiz->bin);
-    thiz->bin = NULL;
-    gst_object_unref (parent);
-  }
-
-  if (thiz->image)
-  {
+  if (thiz->image) {
     enesim_renderer_unref (thiz->image);
     thiz->image = NULL;
   }
-
+#endif
   g_free (thiz);
 }
 
@@ -438,7 +144,7 @@ gst_egueb_demux_video_provider_descriptor_open (void * data,
 
   str = egueb_dom_string_string_get (uri);
   GST_ERROR ("Open URI %s", str);
-  g_object_set(thiz->uridecodebin, "uri", str, NULL);
+  g_object_set (thiz->bin, "uri", str, NULL);
 }
 
 static void
@@ -447,23 +153,25 @@ gst_egueb_demux_video_provider_descriptor_close (void * data)
   GstEguebDemuxVideoProvider *thiz = data;
 
   GST_ERROR_OBJECT (thiz->bin, "Closing");
-  gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_READY);
+  gst_element_set_state (thiz->bin, GST_STATE_READY);
 }
 
-static void gst_egueb_demux_video_provider_descriptor_play(void * data)
+static void
+gst_egueb_demux_video_provider_descriptor_play (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
   GST_ERROR_OBJECT (thiz->bin, "Playing");
-  gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_PLAYING);
+  gst_element_set_state (thiz->bin, GST_STATE_PLAYING);
 }
 
-static void gst_egueb_demux_video_provider_descriptor_pause(void * data)
+static void
+gst_egueb_demux_video_provider_descriptor_pause (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
 
   GST_ERROR_OBJECT (thiz->bin, "Pausing");
-  gst_egueb_demux_video_provider_set_state (thiz, GST_STATE_PAUSED);
+  gst_element_set_state (thiz->bin, GST_STATE_PAUSED);
 }
 
 static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
@@ -660,8 +368,8 @@ gst_egueb_demux_multimedia_video_cb(
   vp = egueb_dom_video_provider_new (&gst_egueb_demux_video_provider,
       notifier, enesim_renderer_ref (r), n);
   dvp = egueb_dom_video_provider_data_get (vp);
-  dvp->image = r;
-  g_object_set_data (G_OBJECT (dvp->bin), "videoprovider", dvp);
+  g_object_set (dvp->bin, "renderer", enesim_renderer_ref (r), NULL);
+  g_object_set (dvp->bin, "notifier", notifier, NULL);
 
   /* add the pad added/removed callbacks */
   g_signal_connect (G_OBJECT (dvp->bin), "pad-added",
@@ -2094,6 +1802,7 @@ static void
 gst_egueb_demux_downgrade_state (GstEguebDemux * thiz,
     GstState from, GstState to)
 {
+#if 0
   GstIterator *it;
   GstElement *child;
 #if HAVE_GST_1
@@ -2132,11 +1841,13 @@ gst_egueb_demux_downgrade_state (GstEguebDemux * thiz,
     gst_object_unref(child);
   }
   gst_iterator_free(it);
+#endif
 }
 
 static void
 gst_egueb_demux_upgrade_state (GstEguebDemux * thiz, GstState to)
 {
+#if 0
   GstIterator *it;
   GstElement *child;
 #if HAVE_GST_1
@@ -2175,6 +1886,7 @@ gst_egueb_demux_upgrade_state (GstEguebDemux * thiz, GstState to)
     gst_object_unref(child);
   }
   gst_iterator_free(it);
+#endif
 }
 
 
@@ -2208,7 +1920,7 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
       break;
   }
 
-  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+  ret = GST_ELEMENT_CLASS (gst_egueb_demux_parent_class)->change_state (element, transition);
   GST_ERROR ("ret = %d", ret);
 
   switch (transition) {
@@ -2323,6 +2035,7 @@ static void
 gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GstBinClass *gstbin_class = GST_BIN_CLASS (klass);
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
   GstPadTemplate *sink_template;
 
@@ -2335,7 +2048,7 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
   gobject_class->get_property =
       GST_DEBUG_FUNCPTR (gst_egueb_demux_get_property);
 
-  parent_class = g_type_class_peek_parent (klass);
+  gst_egueb_demux_parent_class = g_type_class_peek_parent (klass);
 
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_egueb_demux_change_state);
@@ -2367,8 +2080,8 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
       gst_static_pad_template_get (&gst_egueb_demux_other_factory));
 
   gst_element_class_set_details_simple (element_class,
-      "Egueb SVG Parser/Demuxer/Decoder",
+      "Egueb Parser/Demuxer/Decoder",
       "Codec/Demuxer",
-      "Generates buffers with the SVG content rendered",
+      "Generates buffers with the egueb content rendered",
       "<enesim-devel@googlegroups.com>");
 }

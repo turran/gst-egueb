@@ -12,13 +12,15 @@
 #endif
 
 GST_DEBUG_CATEGORY (gst_egueb_demux_debug);
+GST_DEBUG_CATEGORY (gst_egueb_video_bin_debug);
 GST_DEBUG_CATEGORY (gst_egueb_document_debug);
 
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
   /* first register the debug categories */
-  GST_DEBUG_CATEGORY_INIT (gst_egueb_demux_debug, "eguebdemux", 0, "Egueb SVG demuxer");
+  GST_DEBUG_CATEGORY_INIT (gst_egueb_demux_debug, "eguebdemux", 0, "Egueb demuxer");
+  GST_DEBUG_CATEGORY_INIT (gst_egueb_video_bin_debug, "eguebvideobin", 0, "Egueb video bin");
   GST_DEBUG_CATEGORY_INIT (gst_egueb_document_debug, "eguebdoc", 0, "Egueb document");
 
   /* now register the elements */
