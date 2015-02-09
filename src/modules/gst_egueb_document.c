@@ -46,7 +46,6 @@ struct _Gst_Egueb_Document
 	Egueb_Dom_Node *doc;
 	Egueb_Dom_Node *topmost;
 	Egueb_Dom_Feature *io;
-	Egueb_Dom_Feature *multimedia;
 };
 
 typedef struct _Gst_Egueb_Document_Pipeline
@@ -530,13 +529,6 @@ void gst_egueb_document_free(Gst_Egueb_Document *thiz)
 		_gst_egueb_document_feature_io_cleanup(thiz);
 		egueb_dom_feature_unref(thiz->io);
 		thiz->io = NULL;
-	}
-
-	if (thiz->multimedia)
-	{
-		_gst_egueb_document_feature_multimedia_cleanup(thiz);
-		egueb_dom_feature_unref(thiz->multimedia);
-		thiz->multimedia = NULL;
 	}
 
 	if (thiz->topmost)
