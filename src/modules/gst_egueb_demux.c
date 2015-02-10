@@ -102,6 +102,9 @@ typedef struct _GstEguebDemuxVideoProvider
   GstEguebDemux *demux;
   GstElement *bin;
   GstState requested;
+  /* in case of a pending async stop */
+  gint async;
+  gboolean in_error;
 } GstEguebDemuxVideoProvider;
 
 static void *
@@ -123,11 +126,11 @@ gst_egueb_demux_video_provider_descriptor_destroy (void * data)
 
   GST_DEBUG_OBJECT (thiz->bin, "Destroying the video provider");
 
-  g_mutex_lock (thiz->demux->vproviders_lock);
+  g_rec_mutex_lock (thiz->demux->vproviders_lock);
   thiz->requested = GST_STATE_NULL;
   gst_element_set_state (thiz->bin, GST_STATE_NULL);
   thiz->demux->vproviders = g_list_remove (thiz->demux->vproviders, thiz);
-  g_mutex_unlock (thiz->demux->vproviders_lock);
+  g_rec_mutex_unlock (thiz->demux->vproviders_lock);
 
   g_free (thiz);
 }
@@ -150,10 +153,10 @@ gst_egueb_demux_video_provider_descriptor_close (void * data)
   GstEguebDemuxVideoProvider *thiz = data;
 
   GST_DEBUG_OBJECT (thiz->bin, "Closing");
-  g_mutex_lock (thiz->demux->vproviders_lock);
+  g_rec_mutex_lock (thiz->demux->vproviders_lock);
   thiz->requested = GST_STATE_READY;
   gst_element_set_state (thiz->bin, GST_STATE_READY);
-  g_mutex_unlock (thiz->demux->vproviders_lock);
+  g_rec_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
 static void
@@ -162,10 +165,10 @@ gst_egueb_demux_video_provider_descriptor_play (void * data)
   GstEguebDemuxVideoProvider *thiz = data;
 
   GST_DEBUG_OBJECT (thiz->bin, "Playing");
-  g_mutex_lock (thiz->demux->vproviders_lock);
+  g_rec_mutex_lock (thiz->demux->vproviders_lock);
   thiz->requested = GST_STATE_PLAYING;
   gst_element_set_state (thiz->bin, GST_STATE_PLAYING);
-  g_mutex_unlock (thiz->demux->vproviders_lock);
+  g_rec_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
 static void
@@ -174,10 +177,10 @@ gst_egueb_demux_video_provider_descriptor_pause (void * data)
   GstEguebDemuxVideoProvider *thiz = data;
 
   GST_DEBUG_OBJECT (thiz->bin, "Pausing");
-  g_mutex_lock (thiz->demux->vproviders_lock);
+  g_rec_mutex_lock (thiz->demux->vproviders_lock);
   thiz->requested = GST_STATE_PAUSED;
   gst_element_set_state (thiz->bin, GST_STATE_PAUSED);
-  g_mutex_unlock (thiz->demux->vproviders_lock);
+  g_rec_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
 static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
@@ -394,10 +397,10 @@ gst_egueb_demux_multimedia_video_cb(
   gst_element_set_locked_state (dvp->bin, TRUE);
 
   /* add the video pipeline to our own bin */
-  g_mutex_lock (thiz->vproviders_lock);
+  g_rec_mutex_lock (thiz->vproviders_lock);
   gst_bin_add (GST_BIN (thiz), dvp->bin);
   thiz->vproviders = g_list_append (thiz->vproviders, dvp);
-  g_mutex_unlock (thiz->vproviders_lock);
+  g_rec_mutex_unlock (thiz->vproviders_lock);
 
   /* finally set the video provider on the event */
   egueb_dom_event_multimedia_video_provider_set (ev, vp);
@@ -435,6 +438,74 @@ gst_egueb_demux_multimedia_cleanup (GstEguebDemux * thiz)
   /* set the counters */
   thiz->vproviders_count = 0;
 }
+
+/*----------------------------------------------------------------------------*
+ *                              Message Task                                  *
+ *----------------------------------------------------------------------------*/
+static void
+gst_egueb_demux_async_main (gpointer user_data)
+{
+  GstEguebDemux *thiz;
+  GstMessage *message;
+
+  thiz = GST_EGUEB_DEMUX (user_data);
+  message = g_async_queue_pop (thiz->async_queue);
+
+  switch (GST_MESSAGE_TYPE (message)) {
+    case GST_MESSAGE_ELEMENT:
+      if (GST_IS_EGUEB_VIDEO_BIN (GST_MESSAGE_SRC (message))) {
+        const GstStructure *s;
+        const gchar *name;
+
+        s = gst_message_get_structure (message);
+        name = gst_structure_get_name (s);
+        /* check if the element that sent the error is still part
+         * of our video providers
+         */
+        if (!strcmp (name, "error")) {
+          GList *l;
+
+          g_rec_mutex_lock (thiz->vproviders_lock);
+          for (l = thiz->vproviders; l; l = l->next) {
+            GstEguebDemuxVideoProvider *vp = l->data;
+
+            if (vp->bin == GST_ELEMENT (GST_MESSAGE_SRC (message))) {
+              GstState current;
+
+              /* While we wait for this message to arrive, it is possible
+               * that the user decides to send the bin to ready and set a
+               * a new URI and set it back to playing, check that we are in
+               * error
+               */
+              if (!vp->in_error)
+                continue;
+
+              /* Make sure that it is not on the NULL state already */
+              gst_element_get_state (vp->bin, &current, NULL, 0);
+              if (current != GST_STATE_NULL) {
+                GST_INFO_OBJECT (thiz, "Cleaning up video provider %s",
+                    gst_element_get_name (vp->bin));
+                vp->requested = GST_STATE_READY;
+                gst_element_set_state (vp->bin, GST_STATE_READY);
+              }
+
+              if (vp->async) {
+                gst_element_post_message (vp->bin, gst_message_new_async_done (
+                    GST_OBJECT (vp->bin), GST_CLOCK_TIME_NONE));
+              }
+            }
+          }
+          g_rec_mutex_unlock (thiz->vproviders_lock);
+        }
+      }
+      break;
+
+    default:
+      break;
+  }
+  gst_message_unref (message);
+}
+
 
 /* Add the templates based on the implementation mime */
 static GstPadTemplate *
@@ -824,6 +895,9 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
 #endif
   gst_object_unref (pad);
 
+  /* start the async task */
+  gst_task_start (thiz->async_task);
+
 no_window:
   egueb_dom_feature_unref (render);
 no_render:
@@ -880,6 +954,8 @@ gst_egueb_demux_set_allocation (GstEguebDemux * thiz,
 static void
 gst_egueb_demux_cleanup (GstEguebDemux * thiz)
 {
+  GstMessage *old;
+
   GST_DEBUG_OBJECT (thiz, "Cleaning up");
 
 #if HAVE_GST_1
@@ -927,6 +1003,17 @@ gst_egueb_demux_cleanup (GstEguebDemux * thiz)
   if (thiz->location) {
     g_free (thiz->location);
     thiz->location = NULL;
+  }
+
+  /* destroy our async task */
+  gst_task_stop (thiz->async_task);
+  /* the wakup message */
+  g_async_queue_push (thiz->async_queue, gst_message_new_eos (GST_OBJECT (
+      thiz)));
+  gst_task_join (thiz->async_task);
+  /* destroy old messages correctly */
+  while ((old = g_async_queue_try_pop (thiz->async_queue))) {
+    gst_message_unref (old);
   }
 
   /* check that we do not have any video provider dangling
@@ -1768,6 +1855,156 @@ gst_egueb_demux_video_query_simple (GstPad * pad, GstQuery * query)
 #endif
 
 static void
+gst_egueb_demux_unlock_states (GstEguebDemux * thiz, GstState to)
+{
+  GList *l;
+
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+    GstStateChangeReturn ret;
+
+    if (vp->requested >= to)
+      gst_element_set_locked_state (vp->bin, FALSE);
+  }
+}
+
+static void
+gst_egueb_demux_lock_states (GstEguebDemux * thiz)
+{
+  GList *l;
+
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+    gst_element_set_locked_state (vp->bin, TRUE);
+  }
+}
+
+/* must be called with the lock set */
+static GstEguebDemuxVideoProvider *
+gst_egueb_demux_find_video_provider (GstEguebDemux * thiz, GstElement * e)
+{
+  GList *l;
+
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+
+    /* check if the async start belongs to one of our vproviders */
+    if (e = vp->bin) {
+      return vp;
+    }
+  }
+
+  return NULL;
+}
+
+/*----------------------------------------------------------------------------*
+ *                              GstBin interface                              *
+ *----------------------------------------------------------------------------*/
+static void
+gst_egueb_demux_handle_message (GstBin * bin, GstMessage * message)
+{
+  GstEguebDemux *thiz;
+  gboolean handle = TRUE;
+
+  thiz = GST_EGUEB_DEMUX (bin);
+  GST_LOG_OBJECT (thiz, "Message '%s' received",
+      GST_MESSAGE_TYPE_NAME (message));
+
+  switch (GST_MESSAGE_TYPE (message)) {
+    case GST_MESSAGE_ELEMENT:
+      if (GST_IS_EGUEB_VIDEO_BIN (GST_MESSAGE_SRC (message))) {
+        const GstStructure *s;
+        const gchar *name;
+
+        s = gst_message_get_structure (message);
+        name = gst_structure_get_name (s);
+        /* in case of error, we need to send the element to READY
+         * and post the error on the streaming thread
+         */
+        if (!strcmp (name, "error")) {
+          GstEguebDemuxVideoProvider *vp;
+
+          g_rec_mutex_lock (thiz->vproviders_lock);
+          vp = gst_egueb_demux_find_video_provider (thiz, GST_ELEMENT (
+              GST_MESSAGE_SRC (message)));
+          vp->in_error = TRUE;
+          g_rec_mutex_unlock (thiz->vproviders_lock);
+          g_async_queue_push (thiz->async_queue, message);
+          handle = FALSE;
+        }
+      }
+      break;
+
+    case GST_MESSAGE_ASYNC_START:
+    case GST_MESSAGE_ASYNC_DONE:
+      {
+        GstEguebDemuxVideoProvider *vp;
+
+        g_rec_mutex_lock (thiz->vproviders_lock);
+        vp = gst_egueb_demux_find_video_provider (thiz, GST_ELEMENT (
+              GST_MESSAGE_SRC (message)));
+        if (GST_MESSAGE_TYPE (message) == GST_MESSAGE_ASYNC_START)
+          vp->async++;
+        else
+          vp->async--;
+        g_rec_mutex_unlock (thiz->vproviders_lock);
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  if (handle) {
+    GST_BIN_CLASS (gst_egueb_demux_parent_class)->handle_message (bin, message);
+  }
+}
+/*----------------------------------------------------------------------------*
+ *                           GstElement interface                             *
+ *----------------------------------------------------------------------------*/
+static GstStateChangeReturn
+gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
+{
+  GstEguebDemux *thiz = GST_EGUEB_DEMUX (element);
+  GstStateChangeReturn ret;
+  GstState from, to;
+
+  from = GST_STATE_TRANSITION_CURRENT (transition);
+  to = GST_STATE_TRANSITION_NEXT (transition);
+
+  GST_LOG_OBJECT (thiz, "Changing state from %s to %s",
+      gst_element_state_get_name (from),
+      gst_element_state_get_name (to));
+
+  g_rec_mutex_lock (thiz->vproviders_lock);
+  /* In order to set the new base clock on every element we need to pause->playing
+   * on every async_start/done, for that we need to unlock the state of the
+   * videoproviders
+   */
+  gst_egueb_demux_unlock_states (thiz, to);
+
+  ret = GST_ELEMENT_CLASS (gst_egueb_demux_parent_class)->change_state (element, transition);
+
+  /* Lock again any unlocked vprovider */
+  gst_egueb_demux_lock_states (thiz);
+  g_rec_mutex_unlock (thiz->vproviders_lock);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      gst_egueb_demux_cleanup (thiz);
+      break;
+
+    default:
+      break;
+  }
+
+  return ret;
+}
+
+/*----------------------------------------------------------------------------*
+ *                             GObject interface                              *
+ *----------------------------------------------------------------------------*/
+static void
 gst_egueb_demux_get_property (GObject * object, guint prop_id, GValue * value,
     GParamSpec * pspec)
 {
@@ -1820,115 +2057,6 @@ gst_egueb_demux_set_property (GObject * object, guint prop_id,
   }
 }
 
-static void
-gst_egueb_demux_downgrade_state (GstEguebDemux * thiz,
-    GstState from, GstState to)
-{
-#if 0
-  GstIterator *it;
-  GstElement *child;
-#if HAVE_GST_1
-  GValue value = G_VALUE_INIT;
-#endif
-
-  GST_DEBUG_OBJECT (thiz, "Downgrading state from %s to %s",
-      gst_element_state_get_name (from),
-      gst_element_state_get_name (to));
-  it = gst_bin_iterate_elements (GST_BIN (thiz));
-#if HAVE_GST_1
-  while (GST_ITERATOR_OK == gst_iterator_next (it, &value)) {
-#else
-  while (GST_ITERATOR_OK == gst_iterator_next (it, (gpointer *)&child)) {
-#endif
-    const gchar *name;
-#if HAVE_GST_1
-    child = g_value_get_object (&value);
-#endif
-
-    name = gst_element_get_name (child);
-    if (!strncmp (name, "videoprovider", 13)) {
-      GstState state;
-
-      gst_element_get_state (child, &state, NULL, 0);
-      GST_ERROR ("child state is %s", gst_element_state_get_name (state));
-      if (state == from) {
-        GstStateChangeReturn ret;
-
-        GST_ERROR_OBJECT (thiz, "Downgrading child '%s' state to %s",
-            gst_element_get_name (child), gst_element_state_get_name (to));
-        ret = gst_element_set_state (child, to);
-        GST_ERROR ("ret = %d", ret);
-      }
-    }
-    gst_object_unref(child);
-  }
-  gst_iterator_free(it);
-#endif
-}
-
-static void
-gst_egueb_demux_unlock_states (GstEguebDemux * thiz, GstState to)
-{
-  GList *l;
-
-  for (l = thiz->vproviders; l; l = l->next) {
-    GstEguebDemuxVideoProvider *vp = l->data;
-    GstStateChangeReturn ret;
-
-    if (vp->requested >= to)
-      gst_element_set_locked_state (vp->bin, FALSE);
-  }
-}
-
-static void
-gst_egueb_demux_lock_states (GstEguebDemux * thiz)
-{
-  GList *l;
-
-  for (l = thiz->vproviders; l; l = l->next) {
-    GstEguebDemuxVideoProvider *vp = l->data;
-    gst_element_set_locked_state (vp->bin, TRUE);
-  }
-}
-
-static GstStateChangeReturn
-gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
-{
-  GstEguebDemux *thiz = GST_EGUEB_DEMUX (element);
-  GstStateChangeReturn ret;
-  GstState from, to;
-
-  from = GST_STATE_TRANSITION_CURRENT (transition);
-  to = GST_STATE_TRANSITION_NEXT (transition);
-
-  GST_LOG_OBJECT (thiz, "Changing state from %s to %s",
-      gst_element_state_get_name (from),
-      gst_element_state_get_name (to));
-
-  g_mutex_lock (thiz->vproviders_lock);
-  /* In order to set the new base clock on every element we need to pause->playing
-   * on every async_start/done, for that we need to unlock the state of the
-   * videoproviders
-   */
-  gst_egueb_demux_unlock_states (thiz, to);
-
-  ret = GST_ELEMENT_CLASS (gst_egueb_demux_parent_class)->change_state (element, transition);
-
-  /* Lock again any unlocked vprovider */
-  gst_egueb_demux_lock_states (thiz);
-  g_mutex_unlock (thiz->vproviders_lock);
-
-  switch (transition) {
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      gst_egueb_demux_cleanup (thiz);
-      break;
-
-    default:
-      break;
-  }
-
-  return ret;
-}
 
 static void
 gst_egueb_demux_dispose (GObject * object)
@@ -1949,7 +2077,18 @@ gst_egueb_demux_dispose (GObject * object)
     thiz->adapter = NULL;
   }
 
-  g_mutex_free (thiz->vproviders_lock);
+  if (thiz->async_task) { 
+    gst_object_unref (thiz->async_task);
+    thiz->async_task = NULL;
+  }
+
+  if (thiz->async_queue) {
+    g_async_queue_unref (thiz->async_queue);
+    thiz->async_queue = NULL;
+  }
+
+  g_rec_mutex_clear (thiz->vproviders_lock);
+  g_free (thiz->vproviders_lock);
 
   GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
 
@@ -2013,13 +2152,26 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
 
   /* for multimedia */
   thiz->vproviders_count = 0;
-  thiz->vproviders_lock = g_mutex_new ();
+  thiz->vproviders_lock = g_new0 (GRecMutex, 1);
+  g_rec_mutex_init (thiz->vproviders_lock);
   thiz->vproviders = NULL;
 
   /* initial seek segment position */
   thiz->seek = GST_CLOCK_TIME_NONE;
   thiz->next_ts = 0;
   thiz->send_ns = TRUE;
+
+  /* our async task */
+#if HAVE_GST_1
+  thiz->async_task = gst_task_new (gst_egueb_demux_async_main, thiz, NULL);
+  g_rec_mutex_init (&thiz->async_lock);
+#else
+  thiz->async_task = gst_task_create (gst_egueb_demux_async_main, thiz);
+  g_static_rec_mutex_init (&thiz->async_lock);
+#endif
+  thiz->async_queue = g_async_queue_new ();
+  gst_task_set_lock (thiz->async_task, &thiz->async_lock);
+
   /* set default properties */
   thiz->container_w = DEFAULT_CONTAINER_WIDTH;
   thiz->container_h = DEFAULT_CONTAINER_HEIGHT;
@@ -2080,4 +2232,6 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
       "Codec/Demuxer",
       "Generates buffers with the egueb content rendered",
       "<enesim-devel@googlegroups.com>");
+
+  gstbin_class->handle_message = gst_egueb_demux_handle_message;
 }

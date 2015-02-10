@@ -207,7 +207,10 @@ gst_egueb_video_bin_uridecodebin_pad_added_cb (GstElement * src,
 #else
     conv = gst_element_factory_make ("ffmpegcolorspace", NULL);
 #endif
+    thiz->convert = gst_object_ref (conv);
+
     sink = gst_element_factory_make ("appsink", NULL);
+    thiz->appsink = gst_object_ref (sink);
     appsink_caps =  gst_caps_new_simple (
 #if HAVE_GST_1
         "video/x-raw",
@@ -276,6 +279,24 @@ gst_egueb_video_bin_uridecodebin_no_more_pads_cb (GstElement * src,
   gst_element_no_more_pads (GST_ELEMENT (thiz));
 }
 
+static void
+gst_egueb_video_bin_cleanup (GstEguebVideoBin * thiz)
+{
+  if (thiz->convert) {
+    gst_element_set_state (thiz->convert, GST_STATE_NULL);
+    gst_bin_remove (GST_BIN (thiz), thiz->convert);
+    gst_object_unref (thiz->convert);
+    thiz->convert = NULL;
+  }
+
+  if (thiz->appsink) {
+    gst_element_set_state (thiz->appsink, GST_STATE_NULL);
+    gst_bin_remove (GST_BIN (thiz), thiz->appsink);
+    gst_object_unref (thiz->appsink);
+    thiz->appsink = NULL;
+  }
+}
+
 /*----------------------------------------------------------------------------*
  *                              GstBin interface                              *
  *----------------------------------------------------------------------------*/
@@ -292,11 +313,10 @@ gst_egueb_video_bin_handle_message (GstBin * bin, GstMessage * message)
   switch (GST_MESSAGE_TYPE (message)) {
     case GST_MESSAGE_ERROR:
       gst_message_unref (message);
-      /* We can not change the state of the bin from the streaming thread
-       * we need to enqueue this message for later
-       */
-      //gst_element_set_state (GST_ELEMENT (thiz), GST_STATE_READY);
-      /* TODO Send a notification of the error async */
+      /* TODO Later put the actual egueb error here */
+      message = gst_message_new_element (GST_OBJECT (bin),
+          gst_structure_new_empty ("error"));
+      gst_element_post_message (GST_ELEMENT (bin), message);
       handle = FALSE;
       break;
 
@@ -308,6 +328,29 @@ gst_egueb_video_bin_handle_message (GstBin * bin, GstMessage * message)
   if (handle) {
     GST_BIN_CLASS (gst_egueb_video_bin_parent_class)->handle_message (bin, message);
   }
+}
+
+/*----------------------------------------------------------------------------*
+ *                           GstElement interface                             *
+ *----------------------------------------------------------------------------*/
+static GstStateChangeReturn
+gst_egueb_video_bin_change_state (GstElement * element, GstStateChange transition)
+{
+  GstEguebVideoBin *thiz = GST_EGUEB_VIDEO_BIN (element);
+  GstStateChangeReturn ret;
+
+  ret = GST_ELEMENT_CLASS (gst_egueb_video_bin_parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      gst_egueb_video_bin_cleanup (thiz);
+      break;
+
+    default:
+      break;
+  }
+
+  return ret;
 }
 
 /*----------------------------------------------------------------------------*
@@ -405,10 +448,9 @@ gst_egueb_video_bin_class_init (GstEguebVideoBinClass * klass)
       "Egueb Video Provider", "Sink",
       "Implements the video provider interface",
       "<enesim-devel@googlegroups.com>");
-#if 0
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_egueb_video_bin_change_state);
-#endif
+
   gstbin_class->handle_message = gst_egueb_video_bin_handle_message;
 }
 
@@ -459,30 +501,4 @@ gst_egueb_video_bin_unlock (GstEguebVideoBin * thiz)
   g_mutex_unock (thiz->lock);
 }
 
-static void
-gst_egueb_video_bin_reset (GstEguebVideoBin * thiz)
-{
-  gst_egueb_video_bin_lock (thiz);
-  if (thiz->uridecodebin) {
-    gst_element_set_state (thiz->uridecodebin, GST_STATE_NULL);
-    gst_bin_remove (thiz->bin, thiz->uridecodebin);
-    gst_object_unref (thiz->uridecodebin);
-    thiz->uridecodebin = NULL;
-  }
-
-  if (thiz->convert) {
-    gst_element_set_state (thiz->convert, GST_STATE_NULL);
-    gst_bin_remove (thiz->bin, thiz->convert);
-    gst_object_unref (thiz->convert);
-    thiz->convert = NULL;
-  }
-
-  if (thiz->capsfilter) {
-    gst_element_set_state (thiz->capsfilter, GST_STATE_NULL);
-    gst_bin_remove (thiz->bin, thiz->capsfilter);
-    gst_object_unref (thiz->capsfilter);
-    thiz->capsfilter = NULL;
-  }
-  gst_egueb_video_bin_unlock (thiz);
-}
 #endif

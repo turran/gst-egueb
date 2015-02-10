@@ -65,6 +65,15 @@ struct _GstEguebDemux
   GstSegment *pending_segment;
   Gst_Egueb_Document *gdoc;
 
+  /* For the async task */
+  GstTask *async_task;
+#if HAVE_GST_1
+  GRecMutex async_lock;
+#else
+  GStaticRecMutex async_lock;
+#endif
+  GAsyncQueue *async_queue;
+
   /* The egueb related stuff */
   Egueb_Dom_Node *doc;
   Egueb_Dom_Node *topmost;
@@ -97,7 +106,7 @@ struct _GstEguebDemux
   /* Multimedia feature */
   Egueb_Dom_Feature *multimedia;
   GList *vproviders;
-  GMutex *vproviders_lock;
+  GRecMutex *vproviders_lock;
   gint vproviders_count;
 
   gboolean done;

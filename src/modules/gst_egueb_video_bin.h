@@ -45,8 +45,8 @@ typedef struct _GstEguebVideoBin
   GstBin parent;
   Enesim_Renderer *image;
   GstElement *uridecodebin;
-  GstElement *convert;
   GstElement *appsink;
+  GstElement *convert;
 } GstEguebVideoBin;
 
 typedef struct _GstEguebVideoBinClass
