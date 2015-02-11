@@ -26,7 +26,6 @@ enum {
   PROP_0,
   PROP_RENDERER,
   PROP_URI,
-  PROP_NOTIFIER,
 };
 
 static GstStaticPadTemplate gst_egueb_video_bin_other_factory =

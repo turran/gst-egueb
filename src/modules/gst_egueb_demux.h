@@ -17,6 +17,9 @@
 
 #include <Egueb_Dom.h>
 #include <Egueb_Smil.h>
+#if BUILD_EGUEB_SCRIPT
+#include <Egueb_Script.h>
+#endif
 
 #include "gst_egueb_document.h"
 
@@ -108,6 +111,10 @@ struct _GstEguebDemux
   GList *vproviders;
   GRecMutex *vproviders_lock;
   gint vproviders_count;
+
+  /* Scripting feature */
+  Egueb_Dom_Feature *script;
+  Eina_Hash *scripters;
 
   gboolean done;
 

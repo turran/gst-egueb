@@ -100,15 +100,18 @@ enum
 typedef struct _GstEguebDemuxVideoProvider
 {
   GstEguebDemux *demux;
+  Egueb_Dom_Media_Notifier *notifier;
   GstElement *bin;
   GstState requested;
   /* in case of a pending async stop */
   gint async;
   gboolean in_error;
+  /* pending notifications to send to the notifier */
+  GList *notifications;
 } GstEguebDemuxVideoProvider;
 
-static void *
-gst_egueb_demux_video_provider_descriptor_create (void)
+GstEguebDemuxVideoProvider *
+gst_egueb_demux_video_provider_new (void)
 {
   GstEguebDemuxVideoProvider *thiz;
 
@@ -128,6 +131,10 @@ gst_egueb_demux_video_provider_descriptor_destroy (void * data)
 
   g_rec_mutex_lock (thiz->demux->vproviders_lock);
   thiz->requested = GST_STATE_NULL;
+
+  egueb_dom_media_notifier_unref (thiz->notifier);
+  thiz->notifier = NULL;
+
   gst_element_set_state (thiz->bin, GST_STATE_NULL);
   thiz->demux->vproviders = g_list_remove (thiz->demux->vproviders, thiz);
   g_rec_mutex_unlock (thiz->demux->vproviders_lock);
@@ -183,9 +190,8 @@ gst_egueb_demux_video_provider_descriptor_pause (void * data)
   g_rec_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
-static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
-  /* .version = */ EGUEB_DOM_VIDEO_PROVIDER_DESCRIPTOR_VERSION,
-  /* .create  = */ gst_egueb_demux_video_provider_descriptor_create,
+static Egueb_Dom_Media_Provider_Descriptor gst_egueb_demux_video_provider = {
+  /* .version = */ EGUEB_DOM_MEDIA_PROVIDER_DESCRIPTOR_VERSION,
   /* .destroy = */ gst_egueb_demux_video_provider_descriptor_destroy,
   /* .open    = */ gst_egueb_demux_video_provider_descriptor_open,
   /* .close   = */ gst_egueb_demux_video_provider_descriptor_close,
@@ -193,6 +199,25 @@ static Egueb_Dom_Video_Provider_Descriptor gst_egueb_demux_video_provider = {
   /* .pause   = */ gst_egueb_demux_video_provider_descriptor_pause
 };
 
+static void
+gst_egueb_demux_video_provider_send_notifications (
+    GstEguebDemuxVideoProvider * thiz)
+{
+  GList *n;
+
+  for (n = thiz->notifications; n; n = n->next) {
+    GstStructure *s = n->data;
+    const gchar *name;
+
+    name = gst_structure_get_name (s);
+    if (!strcmp (name, "error")) {
+
+    } else if (!strcmp (name, "state")) {
+
+    }
+  }
+  g_list_free_full (thiz->notifications, (GDestroyNotify) gst_structure_free);
+}
 /*----------------------------------------------------------------------------*
  *                           Multimedia interface                             *
  *----------------------------------------------------------------------------*/
@@ -361,10 +386,10 @@ gst_egueb_demux_multimedia_video_cb(
 {
   GstEguebDemux *thiz;
   GstEguebDemuxVideoProvider *dvp;
-  Egueb_Dom_Video_Provider *vp = NULL;
+  Egueb_Dom_Media_Provider *vp;
+  Egueb_Dom_Media_Notifier *notifier;
   Egueb_Dom_Node *n;
   Enesim_Renderer *r;
-  const Egueb_Dom_Video_Provider_Notifier *notifier = NULL;
   gchar *name;
 
   thiz = GST_EGUEB_DEMUX (data);
@@ -372,14 +397,16 @@ gst_egueb_demux_multimedia_video_cb(
 
   n = egueb_dom_event_target_get (ev);
   r = egueb_dom_event_multimedia_video_renderer_get (ev);
+  notifier = egueb_dom_event_multimedia_notifier_get (ev);
 
   /* create our video provider */
-  vp = egueb_dom_video_provider_new (&gst_egueb_demux_video_provider,
-      notifier, enesim_renderer_ref (r), n);
-  dvp = egueb_dom_video_provider_data_get (vp);
-  g_object_set (dvp->bin, "renderer", enesim_renderer_ref (r), NULL);
-  g_object_set (dvp->bin, "notifier", notifier, NULL);
+  dvp = gst_egueb_demux_video_provider_new ();
   dvp->demux = thiz;
+  dvp->notifier = notifier;
+  g_object_set (dvp->bin, "renderer", enesim_renderer_ref (r), NULL);
+
+  vp = egueb_dom_media_provider_new (&gst_egueb_demux_video_provider,
+      r, dvp);
 
   /* add the pad added/removed callbacks */
   g_signal_connect (G_OBJECT (dvp->bin), "pad-added",
@@ -403,7 +430,7 @@ gst_egueb_demux_multimedia_video_cb(
   g_rec_mutex_unlock (thiz->vproviders_lock);
 
   /* finally set the video provider on the event */
-  egueb_dom_event_multimedia_video_provider_set (ev, vp);
+  egueb_dom_event_multimedia_provider_set (ev, vp);
   egueb_dom_node_unref (n);
 }
 
@@ -439,6 +466,138 @@ gst_egueb_demux_multimedia_cleanup (GstEguebDemux * thiz)
   thiz->vproviders_count = 0;
 }
 
+static void
+gst_egueb_demux_multimedia_send_notifications (GstEguebDemux * thiz)
+{
+  GList *l;
+
+  g_rec_mutex_lock (thiz->vproviders_lock);
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+    gst_egueb_demux_video_provider_send_notifications (vp);
+  }
+  g_rec_mutex_unlock (thiz->vproviders_lock);
+}
+
+/* call with the vproviders_lock taken */
+static void
+gst_egueb_demux_multimedia_unlock_states (GstEguebDemux * thiz, GstState to)
+{
+  GList *l;
+
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+    GstStateChangeReturn ret;
+
+    if (vp->requested >= to)
+      gst_element_set_locked_state (vp->bin, FALSE);
+  }
+}
+
+/* call with the vproviders_lock taken */
+static void
+gst_egueb_demux_multimedia_lock_states (GstEguebDemux * thiz)
+{
+  GList *l;
+
+  for (l = thiz->vproviders; l; l = l->next) {
+    GstEguebDemuxVideoProvider *vp = l->data;
+    gst_element_set_locked_state (vp->bin, TRUE);
+  }
+}
+/*----------------------------------------------------------------------------*
+ *                             Script feature                                 *
+ *----------------------------------------------------------------------------*/
+#if BUILD_EGUEB_SCRIPT
+static void 
+gst_egueb_demux_script_scripter_cb(
+		Egueb_Dom_Event *ev, void *data)
+{
+  GstEguebDemux * thiz;
+  Egueb_Dom_Scripter *scripter;
+  Egueb_Dom_String *type;
+  const char *stype;
+
+  thiz = GST_EGUEB_DEMUX (data);
+
+  /* check for our own scripters */
+  type = egueb_dom_event_script_type_get (ev);
+  stype = egueb_dom_string_string_get (type);
+  /* normalize the type */
+  if (!strcmp(stype, "application/ecmascript") ||
+      !strcmp(stype, "text/ecmascript") ||
+      !strcmp(stype, "text/javascript"))
+    stype = "application/ecmascript";
+
+  GST_ERROR_OBJECT (thiz, "Requesting scripter for '%s'", stype);
+  scripter = eina_hash_find (thiz->scripters, stype);
+  if (scripter) {
+    egueb_dom_event_script_scripter_set (ev, scripter);
+    goto done;
+  }
+
+  scripter = egueb_script_scripter_new (stype);
+  if (scripter) {
+    GST_ERROR_OBJECT (thiz, "Registering scripter for '%s'", stype);
+    eina_hash_add (thiz->scripters, stype, scripter);
+    /* TODO add any global object we might need, like the window object? */
+    egueb_dom_event_script_scripter_set(ev, scripter);
+  }
+
+done:
+  egueb_dom_string_unref (type);
+}
+
+static void
+gst_egueb_demux_script_init (GstEguebDemux * thiz)
+{
+  thiz->scripters = eina_hash_string_superfast_new (EINA_FREE_CB (
+      egueb_dom_scripter_free));
+}
+
+static void
+gst_egueb_demux_script_setup (GstEguebDemux * thiz)
+{
+  Egueb_Dom_Feature *feature;
+
+  if (thiz->script)
+    return;
+
+  feature = egueb_dom_node_feature_get (thiz->topmost,
+      EGUEB_DOM_FEATURE_SCRIPT_NAME, NULL);
+
+  if (!feature) return;
+
+  egueb_dom_node_event_listener_add (thiz->topmost,
+      EGUEB_DOM_EVENT_SCRIPT_SCRIPTER, gst_egueb_demux_script_scripter_cb,
+      EINA_TRUE, thiz);
+  thiz->script = feature;
+}
+
+static void
+gst_egueb_demux_script_cleanup (GstEguebDemux * thiz)
+{
+  Eina_Iterator *it;
+  Egueb_Dom_Scripter *scripter;
+
+  /* first remove every global object to release any
+   * reference that blocks the destruction of the document
+   * like a reference to the document itself
+   */
+
+  it = eina_hash_iterator_data_new (thiz->scripters);
+  EINA_ITERATOR_FOREACH (it, scripter)
+  {
+    egueb_dom_scripter_global_clear (scripter);
+  }
+  eina_iterator_free (it);
+
+  if (thiz->script) {
+    egueb_dom_feature_unref (thiz->script);
+    thiz->script = NULL;
+  }
+}
+#endif
 /*----------------------------------------------------------------------------*
  *                              Message Task                                  *
  *----------------------------------------------------------------------------*/
@@ -863,6 +1022,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
       EGUEB_SMIL_FEATURE_ANIMATION_NAME, NULL);
 
   gst_egueb_demux_multimedia_setup (thiz);
+  gst_egueb_demux_script_setup (thiz);
 
   /* setup our own gst egueb document */
   thiz->gdoc = gst_egueb_document_new (egueb_dom_node_ref (thiz->doc));
@@ -963,6 +1123,7 @@ gst_egueb_demux_cleanup (GstEguebDemux * thiz)
 #endif
 
   gst_egueb_demux_multimedia_cleanup (thiz);
+  gst_egueb_demux_script_cleanup (thiz);
 
   if (thiz->input) {
     egueb_dom_input_unref (thiz->input);
@@ -1543,6 +1704,9 @@ gst_egueb_demux_video_loop (gpointer user_data)
     goto pause;
   }
 
+  /* send every video provider notification from the same thread */
+  gst_egueb_demux_multimedia_send_notifications (thiz);
+
   gst_egueb_demux_draw (thiz);
   gst_egueb_demux_convert (thiz, buf);
   GST_DEBUG_OBJECT (thiz, "Sending buffer with ts: %" GST_TIME_FORMAT,
@@ -1854,31 +2018,6 @@ gst_egueb_demux_video_query_simple (GstPad * pad, GstQuery * query)
 }
 #endif
 
-static void
-gst_egueb_demux_unlock_states (GstEguebDemux * thiz, GstState to)
-{
-  GList *l;
-
-  for (l = thiz->vproviders; l; l = l->next) {
-    GstEguebDemuxVideoProvider *vp = l->data;
-    GstStateChangeReturn ret;
-
-    if (vp->requested >= to)
-      gst_element_set_locked_state (vp->bin, FALSE);
-  }
-}
-
-static void
-gst_egueb_demux_lock_states (GstEguebDemux * thiz)
-{
-  GList *l;
-
-  for (l = thiz->vproviders; l; l = l->next) {
-    GstEguebDemuxVideoProvider *vp = l->data;
-    gst_element_set_locked_state (vp->bin, TRUE);
-  }
-}
-
 /* must be called with the lock set */
 static GstEguebDemuxVideoProvider *
 gst_egueb_demux_find_video_provider (GstEguebDemux * thiz, GstElement * e)
@@ -1981,12 +2120,12 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
    * on every async_start/done, for that we need to unlock the state of the
    * videoproviders
    */
-  gst_egueb_demux_unlock_states (thiz, to);
+  gst_egueb_demux_multimedia_unlock_states (thiz, to);
 
   ret = GST_ELEMENT_CLASS (gst_egueb_demux_parent_class)->change_state (element, transition);
 
   /* Lock again any unlocked vprovider */
-  gst_egueb_demux_lock_states (thiz);
+  gst_egueb_demux_multimedia_lock_states (thiz);
   g_rec_mutex_unlock (thiz->vproviders_lock);
 
   switch (transition) {
@@ -2177,6 +2316,8 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
   thiz->container_h = DEFAULT_CONTAINER_HEIGHT;
   thiz->background = enesim_renderer_background_new();
   enesim_renderer_background_color_set (thiz->background, 0xffffffff);
+
+  gst_egueb_demux_script_init (thiz);
 }
 
 static void
@@ -2189,6 +2330,9 @@ gst_egueb_demux_class_init (GstEguebDemuxClass * klass)
 
   egueb_dom_init ();
   egueb_smil_init ();
+#if BUILD_EGUEB_SCRIPT
+  egueb_script_init ();
+#endif
 
   gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_egueb_demux_dispose);
   gobject_class->set_property =

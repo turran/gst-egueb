@@ -34,6 +34,9 @@ AC_DEFINE_UNQUOTED([VERSION_MICRO], [v_mic], [Micro version])
 VMAJ=v_maj
 AC_SUBST([VMAJ])
 
+## Add parameters for aclocal (keep in sync with Makefile.am)
+AC_SUBST(ACLOCAL_AMFLAGS, "-I m4 -I common/m4")
+
 ### Needed information
 
 AC_CANONICAL_HOST
@@ -83,6 +86,18 @@ case "$gstreamer_api" in
   ;;
 esac
 
+### Optional features
+egueb_script_requirements="egueb-script"
+ENS_ENABLE_ARG([egueb_script], [Enable Scripting support], [yes])
+PKG_CHECK_EXISTS([${egueb_script_requirements}], [have_egueb_script="yes"], [have_egueb_script="no"])
+build_egueb_script="no"
+if test "x${have_egueb_script}" = "xyes" -a "x${want_egueb_script}" = "xyes"; then
+  build_egueb_script="yes"
+  gst_egueb_modules_requirements_pc+=" ${egueb_script_requirements}"
+  AC_DEFINE([BUILD_EGUEB_SCRIPT], [1], [Have support for scripting])
+fi
+AM_CONDITIONAL([BUILD_EGUEB_SCRIPT], [test "x${build_egueb_script}" = "xyes"])
+
 dnl make GST_MAJORMINOR available in Makefile.am
 GST_MAJORMINOR=$gstreamer_api
 AC_SUBST(GST_MAJORMINOR)
@@ -117,6 +132,9 @@ echo "  CPPFLAGS..................................: $CPPFLAGS"
 echo "  CFLAGS....................................: $CFLAGS"
 echo "  LDFLAGS...................................: $LDFLAGS"
 echo "  GStreamer API.............................: $gstreamer_api"
+echo
+echo "Optional features:"
+echo "  Scripting.................................: ${build_egueb_script}"
 echo
 echo "Installation................................: make install (as root if needed, with 'su' or 'sudo')"
 echo "  prefix....................................: $prefix"
