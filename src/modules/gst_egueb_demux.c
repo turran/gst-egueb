@@ -103,6 +103,9 @@ typedef struct _GstEguebDemuxVideoProvider
   Egueb_Dom_Media_Notifier *notifier;
   GstElement *bin;
   GstState requested;
+  /* to update the base time */
+  gboolean update_clock;
+  GstClockTime start_time;
   /* in case of a pending async stop */
   gint async;
   gboolean in_error;
@@ -120,6 +123,88 @@ gst_egueb_demux_video_provider_new (void)
   thiz->requested = GST_STATE_READY;
 
   return thiz;
+}
+
+static void
+gst_egueb_demux_video_provider_send_notifications (
+    GstEguebDemuxVideoProvider * thiz)
+{
+  GList *n;
+
+  for (n = thiz->notifications; n; n = n->next) {
+    GstStructure *s = n->data;
+    const gchar *name;
+
+    name = gst_structure_get_name (s);
+    if (!strcmp (name, "error")) {
+
+    } else if (!strcmp (name, "state")) {
+
+    }
+  }
+  g_list_free_full (thiz->notifications, (GDestroyNotify) gst_structure_free);
+}
+
+static void
+gst_egueb_demux_video_provider_setup_start_time (
+    GstEguebDemuxVideoProvider * thiz)
+{
+  GstClock *clock;
+
+  if (thiz->update_clock)
+    return;
+
+  /* We need to update the base time of the bin once we go to play again */
+  clock = gst_element_get_clock (thiz->bin);
+  if (clock) {
+    GstClockTime now;
+    GstClockTime base_time;
+
+    now = gst_clock_get_time (clock);
+    gst_object_unref (clock);
+
+    base_time = gst_element_get_base_time (thiz->bin);
+    thiz->start_time = now - base_time;
+    thiz->update_clock = TRUE;
+  }
+}
+
+static void
+gst_egueb_demux_video_provider_cleanup_start_time (
+    GstEguebDemuxVideoProvider * thiz)
+{
+  thiz->update_clock = FALSE;
+  thiz->start_time = GST_CLOCK_TIME_NONE;
+}
+
+static void
+gst_egueb_demux_video_provider_update_start_time (
+    GstEguebDemuxVideoProvider * thiz)
+{
+  /* we need to update the base time */
+  if (thiz->update_clock) {
+    GstClock *clock;
+
+    clock = gst_element_get_clock (thiz->bin);
+    if (clock) {
+      GstClockTime now;
+
+      now = gst_clock_get_time (clock);
+      if (GST_CLOCK_TIME_IS_VALID (now)) {
+        GstClockTime new_base_time;
+
+        new_base_time = now - thiz->start_time;
+        GST_ERROR_OBJECT (thiz->bin, "Update base time, start_time=%"
+            GST_TIME_FORMAT ", now=%" GST_TIME_FORMAT ", base_time %" 
+            GST_TIME_FORMAT, GST_TIME_ARGS (thiz->start_time),
+            GST_TIME_ARGS (now), GST_TIME_ARGS (new_base_time));
+
+        gst_element_set_base_time (thiz->bin, new_base_time);
+      }
+      gst_object_unref (clock);
+    }
+    thiz->update_clock = FALSE;
+  }
 }
 
 static void
@@ -170,11 +255,22 @@ static void
 gst_egueb_demux_video_provider_descriptor_play (void * data)
 {
   GstEguebDemuxVideoProvider *thiz = data;
+  GstEguebVideoBin *vbin;
+  GstState current, pending;
 
   GST_DEBUG_OBJECT (thiz->bin, "Playing");
   g_rec_mutex_lock (thiz->demux->vproviders_lock);
   thiz->requested = GST_STATE_PLAYING;
+  /* we should not set to playing if the demux is on paused */
+  gst_element_get_state (GST_ELEMENT (thiz->demux), &current, NULL, 0);
+  if (current == GST_STATE_PAUSED) {
+    goto done;
+  }
+
+  gst_egueb_demux_video_provider_update_start_time (thiz);
   gst_element_set_state (thiz->bin, GST_STATE_PLAYING);
+
+done:
   g_rec_mutex_unlock (thiz->demux->vproviders_lock);
 }
 
@@ -186,6 +282,7 @@ gst_egueb_demux_video_provider_descriptor_pause (void * data)
   GST_DEBUG_OBJECT (thiz->bin, "Pausing");
   g_rec_mutex_lock (thiz->demux->vproviders_lock);
   thiz->requested = GST_STATE_PAUSED;
+  gst_egueb_demux_video_provider_setup_start_time (thiz);
   gst_element_set_state (thiz->bin, GST_STATE_PAUSED);
   g_rec_mutex_unlock (thiz->demux->vproviders_lock);
 }
@@ -199,25 +296,6 @@ static Egueb_Dom_Media_Provider_Descriptor gst_egueb_demux_video_provider = {
   /* .pause   = */ gst_egueb_demux_video_provider_descriptor_pause
 };
 
-static void
-gst_egueb_demux_video_provider_send_notifications (
-    GstEguebDemuxVideoProvider * thiz)
-{
-  GList *n;
-
-  for (n = thiz->notifications; n; n = n->next) {
-    GstStructure *s = n->data;
-    const gchar *name;
-
-    name = gst_structure_get_name (s);
-    if (!strcmp (name, "error")) {
-
-    } else if (!strcmp (name, "state")) {
-
-    }
-  }
-  g_list_free_full (thiz->notifications, (GDestroyNotify) gst_structure_free);
-}
 /*----------------------------------------------------------------------------*
  *                           Multimedia interface                             *
  *----------------------------------------------------------------------------*/
@@ -489,19 +567,34 @@ gst_egueb_demux_multimedia_unlock_states (GstEguebDemux * thiz, GstState to)
     GstEguebDemuxVideoProvider *vp = l->data;
     GstStateChangeReturn ret;
 
-    if (vp->requested >= to)
+    if (vp->requested >= to) {
+
+      if (to == GST_STATE_PAUSED) {
+        GST_ERROR ("setting up");
+        gst_egueb_demux_video_provider_setup_start_time (vp);
+      }
+      GST_ERROR_OBJECT (thiz, "Unlocking '%s' to set state %s",
+          gst_object_get_name (GST_OBJECT (vp->bin)),
+          gst_element_state_get_name (to));
       gst_element_set_locked_state (vp->bin, FALSE);
+    }
   }
 }
 
 /* call with the vproviders_lock taken */
 static void
-gst_egueb_demux_multimedia_lock_states (GstEguebDemux * thiz)
+gst_egueb_demux_multimedia_lock_states (GstEguebDemux * thiz, GstState to)
 {
   GList *l;
 
   for (l = thiz->vproviders; l; l = l->next) {
     GstEguebDemuxVideoProvider *vp = l->data;
+
+    /* set the real base time on the videobin */
+    if (vp->requested == to && to == GST_STATE_PLAYING) {
+      GST_ERROR ("setting base time");
+      //gst_egueb_demux_video_provider_update_start_time (vp);
+    }
     gst_element_set_locked_state (vp->bin, TRUE);
   }
 }
@@ -549,13 +642,6 @@ done:
 }
 
 static void
-gst_egueb_demux_script_init (GstEguebDemux * thiz)
-{
-  thiz->scripters = eina_hash_string_superfast_new (EINA_FREE_CB (
-      egueb_dom_scripter_free));
-}
-
-static void
 gst_egueb_demux_script_setup (GstEguebDemux * thiz)
 {
   Egueb_Dom_Feature *feature;
@@ -572,25 +658,32 @@ gst_egueb_demux_script_setup (GstEguebDemux * thiz)
       EGUEB_DOM_EVENT_SCRIPT_SCRIPTER, gst_egueb_demux_script_scripter_cb,
       EINA_TRUE, thiz);
   thiz->script = feature;
+
+  thiz->scripters = eina_hash_string_superfast_new (EINA_FREE_CB (
+      egueb_dom_scripter_free));
 }
 
 static void
 gst_egueb_demux_script_cleanup (GstEguebDemux * thiz)
 {
-  Eina_Iterator *it;
-  Egueb_Dom_Scripter *scripter;
-
   /* first remove every global object to release any
    * reference that blocks the destruction of the document
    * like a reference to the document itself
    */
+  if (thiz->scripters) {
+    Egueb_Dom_Scripter *scripter;
+    Eina_Iterator *it;
 
-  it = eina_hash_iterator_data_new (thiz->scripters);
-  EINA_ITERATOR_FOREACH (it, scripter)
-  {
-    egueb_dom_scripter_global_clear (scripter);
+    it = eina_hash_iterator_data_new (thiz->scripters);
+    EINA_ITERATOR_FOREACH (it, scripter)
+    {
+      egueb_dom_scripter_global_clear (scripter);
+    }
+    eina_iterator_free (it);
+    /* finally free it */
+    eina_hash_free (thiz->scripters);
+    thiz->scripters = NULL;
   }
-  eina_iterator_free (it);
 
   if (thiz->script) {
     egueb_dom_feature_unref (thiz->script);
@@ -2125,7 +2218,7 @@ gst_egueb_demux_change_state (GstElement * element, GstStateChange transition)
   ret = GST_ELEMENT_CLASS (gst_egueb_demux_parent_class)->change_state (element, transition);
 
   /* Lock again any unlocked vprovider */
-  gst_egueb_demux_multimedia_lock_states (thiz);
+  gst_egueb_demux_multimedia_lock_states (thiz, to);
   g_rec_mutex_unlock (thiz->vproviders_lock);
 
   switch (transition) {
@@ -2316,8 +2409,6 @@ gst_egueb_demux_init (GstEguebDemux * thiz)
   thiz->container_h = DEFAULT_CONTAINER_HEIGHT;
   thiz->background = enesim_renderer_background_new();
   enesim_renderer_background_color_set (thiz->background, 0xffffffff);
-
-  gst_egueb_demux_script_init (thiz);
 }
 
 static void
