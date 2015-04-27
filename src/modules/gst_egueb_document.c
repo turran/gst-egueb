@@ -427,7 +427,7 @@ static void _gst_egueb_document_feature_io_data_cb(Egueb_Dom_Event *ev, void *da
 	if (binbuf_data)
 	{
 		Enesim_Stream *s;
-		s = enesim_stream_buffer_new(binbuf_data, binbuf_len);
+		s = enesim_stream_buffer_new(binbuf_data, binbuf_len, free);
 		egueb_dom_event_io_data_finish(ev, s);
 	}
 	eina_binbuf_free(pipe.binbuf);

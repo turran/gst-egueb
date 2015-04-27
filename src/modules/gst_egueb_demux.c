@@ -493,6 +493,7 @@ gst_egueb_demux_multimedia_video_cb(
       G_CALLBACK (gst_egueb_demux_multimedia_pad_removed_cb), thiz);
   g_signal_connect (G_OBJECT (dvp->bin), "no-more-pads",
       G_CALLBACK (gst_egueb_demux_multimedia_no_more_pads_cb), thiz);
+  /* handle the bin bus */
   /* set a new name */
   name = g_strdup_printf ("videoprovider%d", ++thiz->vproviders_count);
   gst_element_set_name (dvp->bin, name);
@@ -1052,7 +1053,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
 #endif
 
   /* the stream will free the data */
-  s = enesim_stream_buffer_new (data, ssize);
+  s = enesim_stream_buffer_new (data, ssize, free);
   gst_buffer_unref (buf);
 
   /* parse the document */
