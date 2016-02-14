@@ -987,7 +987,7 @@ gst_egueb_demux_convert (GstEguebDemux * thiz, GstBuffer * buffer)
       thiz->h, EINA_FALSE, &sdata, NULL, NULL);
 
   /* convert it to a buffer and send it */
-  enesim_converter_surface (thiz->s, eb);
+  enesim_surface_convert (thiz->s, eb);
   enesim_buffer_unref (eb);
 #if HAVE_GST_1
   gst_buffer_unmap (buffer, &mi);
