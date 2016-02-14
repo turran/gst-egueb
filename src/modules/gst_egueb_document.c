@@ -407,7 +407,7 @@ static void _gst_egueb_document_feature_io_data_cb(Egueb_Dom_Event *ev, void *da
 	/* mark the caps as anything so we can get the data raw as it is stored */
 	uridecodebin = gst_element_factory_make("uridecodebin", NULL);
 	g_object_set (uridecodebin,
-			"uri", egueb_dom_string_string_get(final_uri),
+			"uri", egueb_dom_string_chars_get(final_uri),
 			"caps", gst_caps_new_any(), NULL);
 	g_signal_connect (G_OBJECT (uridecodebin), "pad-added",
 			G_CALLBACK (_gst_egueb_document_data_uridecodebin_pad_added_cb),

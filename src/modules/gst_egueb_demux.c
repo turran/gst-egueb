@@ -234,7 +234,7 @@ gst_egueb_demux_video_provider_descriptor_open (void * data,
   GstEguebDemuxVideoProvider *thiz = data;
   const char *str;
 
-  str = egueb_dom_string_string_get (uri);
+  str = egueb_dom_string_chars_get (uri);
   GST_INFO_OBJECT (thiz->bin, "Open URI %s", str);
   g_object_set (thiz->bin, "uri", str, NULL);
 }
@@ -616,7 +616,7 @@ gst_egueb_demux_script_scripter_cb(
 
   /* check for our own scripters */
   type = egueb_dom_event_script_type_get (ev);
-  stype = egueb_dom_string_string_get (type);
+  stype = egueb_dom_string_chars_get (type);
   /* normalize the type */
   if (!strcmp(stype, "application/ecmascript") ||
       !strcmp(stype, "text/ecmascript") ||
@@ -775,7 +775,7 @@ gst_egueb_demux_get_sink_template (void)
   EINA_ITERATOR_FOREACH (it, mime) {
     GstCaps *cap;
 
-    cap = gst_caps_from_string (egueb_dom_string_string_get(mime));
+    cap = gst_caps_from_string (egueb_dom_string_chars_get(mime));
     gst_caps_append (caps, cap);
   }
 
@@ -1100,7 +1100,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   if (thiz->location) {
     Egueb_Dom_String *uri;
 
-    uri = egueb_dom_string_new_with_string (thiz->location);
+    uri = egueb_dom_string_new_with_chars (thiz->location);
     egueb_dom_document_uri_set (thiz->doc, uri);
   }
 
