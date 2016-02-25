@@ -473,7 +473,7 @@ gst_egueb_demux_multimedia_video_cb(
   thiz = GST_EGUEB_DEMUX (data);
   GST_INFO_OBJECT (thiz, "Multimedia event received");
 
-  n = egueb_dom_event_target_get (ev);
+  n = EGUEB_DOM_NODE(egueb_dom_event_target_get (ev));
   r = egueb_dom_event_multimedia_video_renderer_get (ev);
   notifier = egueb_dom_event_multimedia_notifier_get (ev);
 
@@ -524,8 +524,9 @@ gst_egueb_demux_multimedia_setup (GstEguebDemux * thiz)
       EGUEB_DOM_FEATURE_MULTIMEDIA_NAME, NULL);
   if (!feature) return;
 
-  egueb_dom_node_event_listener_add (thiz->topmost,
-  EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
+  egueb_dom_event_target_event_listener_add (
+      EGUEB_DOM_EVENT_TARGET(thiz->topmost),
+      EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
       gst_egueb_demux_multimedia_video_cb, EINA_TRUE, thiz);
   thiz->multimedia = feature;
 }
@@ -534,7 +535,8 @@ static void
 gst_egueb_demux_multimedia_cleanup (GstEguebDemux * thiz)
 {
   if (thiz->multimedia) {
-    egueb_dom_node_event_listener_remove (thiz->topmost,
+    egueb_dom_event_target_event_listener_remove (
+        EGUEB_DOM_EVENT_TARGET(thiz->topmost),
         EGUEB_DOM_EVENT_MULTIMEDIA_VIDEO,
         gst_egueb_demux_multimedia_video_cb, EINA_TRUE, thiz);
     egueb_dom_feature_unref (thiz->multimedia);
@@ -655,7 +657,8 @@ gst_egueb_demux_script_setup (GstEguebDemux * thiz)
 
   if (!feature) return;
 
-  egueb_dom_node_event_listener_add (thiz->topmost,
+  egueb_dom_event_target_event_listener_add (
+      EGUEB_DOM_EVENT_TARGET (thiz->topmost),
       EGUEB_DOM_EVENT_SCRIPT_SCRIPTER, gst_egueb_demux_script_scripter_cb,
       EINA_TRUE, thiz);
   thiz->script = feature;
@@ -743,8 +746,13 @@ gst_egueb_demux_async_main (gpointer user_data)
               }
 
               if (vp->async) {
+#if HAVE_GST_1
                 gst_element_post_message (vp->bin, gst_message_new_async_done (
                     GST_OBJECT (vp->bin), GST_CLOCK_TIME_NONE));
+#else
+                gst_element_post_message (vp->bin, gst_message_new_async_done (
+                    GST_OBJECT (vp->bin)));
+#endif
               }
             }
           }
@@ -947,7 +955,7 @@ gst_egueb_demux_draw (GstEguebDemux * thiz)
   if (!ret) {
     enesim_log_dump (log);
     if (log) {
-      enesim_log_delete (log);
+      enesim_log_unref (log);
     }
   }
 
@@ -1108,7 +1116,7 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
   ui = egueb_dom_node_feature_get (thiz->topmost,
       EGUEB_DOM_FEATURE_UI_NAME, NULL);
   if (ui) {
-    egueb_dom_feature_ui_input_get (ui, &thiz->input);
+    thiz->input = egueb_dom_feature_ui_input_get (ui);
     egueb_dom_feature_unref (ui);
   }
 
@@ -1116,7 +1124,9 @@ gst_egueb_demux_setup (GstEguebDemux * thiz, GstBuffer * buf)
       EGUEB_SMIL_FEATURE_ANIMATION_NAME, NULL);
 
   gst_egueb_demux_multimedia_setup (thiz);
+#if BUILD_EGUEB_SCRIPT
   gst_egueb_demux_script_setup (thiz);
+#endif
 
   /* setup our own gst egueb document */
   thiz->gdoc = gst_egueb_document_new (egueb_dom_node_ref (thiz->doc));
@@ -1217,7 +1227,9 @@ gst_egueb_demux_cleanup (GstEguebDemux * thiz)
 #endif
 
   gst_egueb_demux_multimedia_cleanup (thiz);
+#if BUILD_EGUEB_SCRIPT
   gst_egueb_demux_script_cleanup (thiz);
+#endif
 
   if (thiz->input) {
     egueb_dom_input_unref (thiz->input);
@@ -1383,7 +1395,9 @@ gst_egueb_demux_video_get_caps (GstPad * pad)
 {
   GstEguebDemux *thiz;
   GstCaps *caps;
-  Egueb_Dom_Feature_Window_Type type;
+  GstStructure *s;
+  Egueb_Dom_Feature_Window_Hint_Data wdata;
+  gint whints;
   gint i;
   int cw, ch;
 
@@ -1399,37 +1413,22 @@ gst_egueb_demux_video_get_caps (GstPad * pad)
     goto beach;
   }
 
-  if (!egueb_dom_feature_window_type_get (thiz->window, &type)) {
-    GST_WARNING_OBJECT (thiz, "Impossible to get the type of the window");
-    goto beach;
-  }
+  s = gst_caps_get_structure (caps, 0);
 
-  if (type == EGUEB_DOM_FEATURE_WINDOW_TYPE_SLAVE) {
-    GST_ERROR_OBJECT (thiz, "Not supported yet");
-    goto beach;
-  } else {
-    int old_cw, old_ch;
+  whints = egueb_dom_feature_window_hints_get(thiz->window, &wdata);
+  if (whints & EGUEB_DOM_FEATURE_WINDOW_HINT_MIN_MAX) {
+    if (wdata.min_width == wdata.max_width)
+      gst_structure_set (s, "width", G_TYPE_INT, wdata.min_width, NULL);
+    else
+      gst_structure_set (s, "width", GST_TYPE_INT_RANGE, wdata.min_width, wdata.max_width, NULL);
 
-    /* FIXME setting the content leads to an undefined behaviour if a set_caps
-     * does not come after this one
-     */
-    egueb_dom_feature_window_content_size_get(thiz->window, &old_cw, &old_ch);
-
-    egueb_dom_feature_window_content_size_set(thiz->window, 0, 0);
-    egueb_dom_feature_window_content_size_get(thiz->window, &cw, &ch);
-
-    /* restore */
-    egueb_dom_feature_window_content_size_set(thiz->window, old_cw, old_ch);
-  }
-
-  for (i = 0; i < gst_caps_get_size (caps); i++) {
-    GstStructure *s;
-
-    s = gst_caps_get_structure (caps, i);
-    if (cw > 0)
-      gst_structure_fixate_field_nearest_int (s, "width", cw);
-    if (ch > 0)
-      gst_structure_fixate_field_nearest_int (s, "height", ch);
+    if (wdata.min_height == wdata.max_height)
+      gst_structure_set (s, "height", G_TYPE_INT, wdata.min_height, NULL);
+    else
+      gst_structure_set (s, "height", GST_TYPE_INT_RANGE, wdata.min_height, wdata.max_height, NULL);
+  } else if (whints & EGUEB_DOM_FEATURE_WINDOW_HINT_PREFERRED) {
+    gst_structure_set (s, "width", G_TYPE_INT, wdata.pref_width,
+        "height", G_TYPE_INT, wdata.pref_height, NULL);
   }
 
 beach:
@@ -1491,7 +1490,7 @@ gst_egueb_demux_video_set_caps (GstPad * pad, GstCaps * caps)
 
     if (thiz->window) {
       GST_INFO_OBJECT (thiz, "Setting size to %dx%d", width, height);
-      egueb_dom_feature_window_content_size_set (thiz->window, width, height);
+      egueb_dom_feature_window_size_set (thiz->window, width, height);
     }
   }
 

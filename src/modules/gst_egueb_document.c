@@ -29,9 +29,6 @@
 #endif
 
 #include "gst_egueb_document.h"
-#if HAVE_GST_0
-#include "Egueb_Video.h"
-#endif
 
 GST_DEBUG_CATEGORY_EXTERN (gst_egueb_document_debug);
 #define GST_CAT_DEFAULT gst_egueb_document_debug
@@ -498,10 +495,12 @@ static void _gst_egueb_document_feature_io_image_cb(Egueb_Dom_Event *ev, void *d
 
 static void _gst_egueb_document_feature_io_cleanup(Gst_Egueb_Document *thiz)
 {
-	egueb_dom_node_event_listener_remove(thiz->topmost,
-			EGUEB_DOM_EVENT_IO_DATA,
+	egueb_dom_event_target_event_listener_remove(
+			EGUEB_DOM_EVENT_TARGET(thiz->topmost),
+ 			EGUEB_DOM_EVENT_IO_DATA,
 			_gst_egueb_document_feature_io_data_cb, EINA_TRUE, thiz);
-	egueb_dom_node_event_listener_remove(thiz->topmost,
+	egueb_dom_event_target_event_listener_remove(
+			EGUEB_DOM_EVENT_TARGET(thiz->topmost),
 			EGUEB_DOM_EVENT_IO_IMAGE,
 			_gst_egueb_document_feature_io_image_cb, EINA_TRUE, thiz);
 }
@@ -555,10 +554,14 @@ void gst_egueb_document_feature_io_setup(Gst_Egueb_Document *thiz)
 	feature = egueb_dom_node_feature_get(thiz->topmost, EGUEB_DOM_FEATURE_IO_NAME, NULL);
 	if (!feature) return;
 
-	egueb_dom_node_event_listener_add(thiz->topmost, EGUEB_DOM_EVENT_IO_DATA,
+	egueb_dom_event_target_event_listener_add(
+			EGUEB_DOM_EVENT_TARGET(thiz->topmost),
+			EGUEB_DOM_EVENT_IO_DATA,
 			_gst_egueb_document_feature_io_data_cb,
 			EINA_TRUE, thiz);
-	egueb_dom_node_event_listener_add(thiz->topmost, EGUEB_DOM_EVENT_IO_IMAGE,
+	egueb_dom_event_target_event_listener_add(
+			EGUEB_DOM_EVENT_TARGET(thiz->topmost),
+			EGUEB_DOM_EVENT_IO_IMAGE,
 			_gst_egueb_document_feature_io_image_cb,
 			EINA_TRUE, thiz);
 	thiz->io = feature;

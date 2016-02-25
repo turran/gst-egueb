@@ -163,7 +163,7 @@ gst_egueb_video_bin_appsink_buffer_cb (GstElement * sink, gpointer user_data)
   GstBuffer *buffer;
   GstCaps *caps;
 
-  g_signal_emit_by_name (appsink, "pull-buffer", &buffer);
+  g_signal_emit_by_name (sink, "pull-buffer", &buffer);
   caps = gst_buffer_get_caps (buffer);
 
   gst_egueb_video_bin_appsink_show (thiz, buffer, caps);
@@ -314,7 +314,13 @@ gst_egueb_video_bin_handle_message (GstBin * bin, GstMessage * message)
       gst_message_unref (message);
       /* TODO Later put the actual egueb error here */
       message = gst_message_new_element (GST_OBJECT (bin),
-          gst_structure_new_empty ("error"));
+#if HAVE_GST_1
+          gst_structure_new_empty ("error")
+#else
+          gst_structure_empty_new ("error")
+#endif
+          );
+
       gst_element_post_message (GST_ELEMENT (bin), message);
       handle = FALSE;
       break;
