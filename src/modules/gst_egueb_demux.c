@@ -1417,15 +1417,22 @@ gst_egueb_demux_video_get_caps (GstPad * pad)
 
   whints = egueb_dom_feature_window_hints_get(thiz->window, &wdata);
   if (whints & EGUEB_DOM_FEATURE_WINDOW_HINT_MIN_MAX) {
-    if (wdata.min_width == wdata.max_width)
-      gst_structure_set (s, "width", G_TYPE_INT, wdata.min_width, NULL);
-    else
+    if (wdata.min_width == wdata.max_width) {
+      if (wdata.min_width < 0)
+        gst_structure_set (s, "width", G_TYPE_INT, thiz->container_w, NULL);
+      else
+        gst_structure_set (s, "width", G_TYPE_INT, wdata.min_width, NULL);
+    } else {
       gst_structure_set (s, "width", GST_TYPE_INT_RANGE, wdata.min_width, wdata.max_width, NULL);
-
-    if (wdata.min_height == wdata.max_height)
-      gst_structure_set (s, "height", G_TYPE_INT, wdata.min_height, NULL);
-    else
+    }
+    if (wdata.min_height == wdata.max_height) {
+      if (wdata.min_height < 0)
+        gst_structure_set (s, "height", G_TYPE_INT, thiz->container_h, NULL);
+      else
+        gst_structure_set (s, "height", G_TYPE_INT, wdata.min_height, NULL);
+    } else {
       gst_structure_set (s, "height", GST_TYPE_INT_RANGE, wdata.min_height, wdata.max_height, NULL);
+    }
   } else if (whints & EGUEB_DOM_FEATURE_WINDOW_HINT_PREFERRED) {
     gst_structure_set (s, "width", G_TYPE_INT, wdata.pref_width,
         "height", G_TYPE_INT, wdata.pref_height, NULL);
